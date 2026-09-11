@@ -1,0 +1,1 @@
+const a=[9,10,11],l=[{value:"physics",label:"Physics"},{value:"biology",label:"Biology"}],e=[{value:"general",label:"UAE General"},{value:"advanced",label:"UAE Advanced"}];export{e as C,a as G,l as S};
