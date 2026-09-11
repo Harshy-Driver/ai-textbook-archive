@@ -2,6 +2,33 @@ import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
+function extractVisionText(imageUrl: string, apiKey: string): Promise<string> {
+  // Placeholder for real vision/OCR API call.
+  // Replace this implementation with a call to your preferred provider
+  // (e.g. Google Vision, AWS Textract, OCR.space) using `imageUrl`.
+  // The response should be plain text extracted from the page image.
+  return Promise.resolve("");
+}
+
+function detectPageStructure(
+  text: string,
+): {
+  chapterTitle: string;
+  unitTitle: string;
+  lessonTitle: string;
+  confidence: number;
+} {
+  // Structural detection heuristics.
+  // In version 1 this is a simple keyword-based guess; when an API key is
+  // configured the real vision response should include these fields directly.
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const chapterTitle = lines.find((l) => /chapter|unit\s+\d/i.test(l)) ?? "Chapter";
+  const lessonTitle = lines.find((l) => /lesson\s+\d/i.test(l)) ?? "Lesson";
+  const unitTitle = "Unit";
+  const confidence = text.length > 50 ? 0.7 : 0.2;
+  return { chapterTitle, unitTitle, lessonTitle, confidence };
+}
+
 export const processPage = mutation({
   args: {
     pageId: v.id("pages"),
@@ -17,25 +44,29 @@ export const processPage = mutation({
 
     try {
       const visionApiKey = process.env.VISION_API_KEY;
+      let extractedText = "";
 
-      if (visionApiKey) {
-        // Real OCR/vision API integration point.
-        // When VISION_API_KEY is set, call the external service here and parse
-        // the response into { text, chapterTitle, unitTitle, lessonTitle, confidence }.
-        // For now we leave this as a documented hook so the user can add the key
-        // via Settings without changing application logic.
-        console.log(`Vision API available — would process page ${args.pageId}`);
+      if (visionApiKey && visionApiKey.trim()) {
+        extractedText = await extractVisionText(page.imageUrl, visionApiKey);
+      } else {
+        // No API configured yet — store a placeholder so the page is marked
+        // readable but the user still needs to add the key for real OCR.
+        extractedText = "[OCR not configured: add VISION_API_KEY to enable text extraction]";
       }
 
-      // No API configured: mark as processed with empty extracted text.
-      // The user can still organize pages manually via the Organize page.
+      const { chapterTitle, unitTitle, lessonTitle, confidence } =
+        detectPageStructure(extractedText);
+
       await ctx.db.patch(args.pageId, {
         status: "processed",
-        extractedText: "",
-        ocrConfidence: 0,
+        extractedText,
+        ocrConfidence: confidence,
+        chapterTitle,
+        unitTitle,
+        lessonTitle,
       });
 
-      return { success: true };
+      return { success: true, confidence };
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to process page";
@@ -70,13 +101,35 @@ export const processPageBatch = mutation({
 
     for (const pageId of args.pageIds) {
       try {
+        const page = await ctx.db.get(pageId);
+        if (!page) {
+          throw new Error("Page not found");
+        }
         await ctx.db.patch(pageId, { status: "processing" });
+
+        const visionApiKey = process.env.VISION_API_KEY;
+        let extractedText = "";
+
+        if (visionApiKey && visionApiKey.trim()) {
+          extractedText = await extractVisionText(page.imageUrl, visionApiKey);
+        } else {
+          extractedText =
+            "[OCR not configured: add VISION_API_KEY to enable text extraction]";
+        }
+
+        const { chapterTitle, unitTitle, lessonTitle, confidence } =
+          detectPageStructure(extractedText);
+
         await ctx.db.patch(pageId, {
           status: "processed",
-          extractedText: "",
-          ocrConfidence: 0,
+          extractedText,
+          ocrConfidence: confidence,
+          chapterTitle,
+          unitTitle,
+          lessonTitle,
         });
-        results.push({ pageId: pageId.toString(), success: true });
+
+        results.push({ pageId: pageId.toString(), success: true, error: undefined });
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to process page";

@@ -15,6 +15,7 @@ const AuthPage = lazy(() => import("./pages/Auth.tsx"));
 const Onboarding = lazy(() => import("./pages/Onboarding.tsx"));
 const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Books = lazy(() => import("./pages/Books.tsx"));
+const Organize = lazy(() => import("./pages/Organize.tsx"));
 const Study = lazy(() => import("./pages/Study.tsx"));
 const Quiz = lazy(() => import("./pages/Quiz.tsx"));
 const Chat = lazy(() => import("./pages/Chat.tsx"));
@@ -139,7 +140,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/onboarding" element={<RequireAuth><Onboarding /></RequireAuth>} />
               <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
               <Route path="/books" element={<RequireAuth><Books /></RequireAuth>} />
-              <Route path="/books/:bookId/organize" element={<RequireAuth><Books /></RequireAuth>} />
+              <Route path="/books/:bookId/organize" element={<RequireAuth><Organize /></RequireAuth>} />
               <Route path="/study" element={<RequireAuth><Study /></RequireAuth>} />
               <Route path="/study/:lessonId" element={<RequireAuth><Study /></RequireAuth>} />
               <Route path="/quizzes" element={<RequireAuth><Quiz /></RequireAuth>} />
