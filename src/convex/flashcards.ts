@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireUser, getCurrentUser } from "./helpers";
 
 export const create = mutation({
   args: {
@@ -13,14 +14,7 @@ export const create = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
-    // Delete existing
+    const user = await requireUser(ctx);
     const existing = await ctx.db
       .query("flashcards")
       .withIndex("by_lesson_user", (q) =>
@@ -30,7 +24,6 @@ export const create = mutation({
     for (const card of existing) {
       await ctx.db.delete(card._id);
     }
-    // Create new
     for (const card of args.cards) {
       await ctx.db.insert("flashcards", {
         userId: user._id,
@@ -65,12 +58,7 @@ export const markReview = mutation({
 export const list = query({
   args: { lessonId: v.id("lessons") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     return await ctx.db
       .query("flashcards")

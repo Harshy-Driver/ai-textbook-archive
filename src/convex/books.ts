@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireUser, getCurrentUser } from "./helpers";
 
 export const create = mutation({
   args: {
@@ -9,13 +10,7 @@ export const create = mutation({
     curriculum: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     const now = Date.now();
     const bookId = await ctx.db.insert("books", {
       userId: user._id,
@@ -33,12 +28,7 @@ export const create = mutation({
 export const listByUser = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     return await ctx.db
       .query("books")
@@ -60,7 +50,6 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const book = await ctx.db.get(args.bookId);
     if (!book) throw new Error("Book not found");
-    // Delete associated pages
     const pages = await ctx.db
       .query("pages")
       .withIndex("by_book", (q) => q.eq("bookId", args.bookId))
@@ -68,7 +57,6 @@ export const remove = mutation({
     for (const page of pages) {
       await ctx.db.delete(page._id);
     }
-    // Delete associated units, chapters, lessons
     const units = await ctx.db
       .query("units")
       .withIndex("by_book", (q) => q.eq("bookId", args.bookId))

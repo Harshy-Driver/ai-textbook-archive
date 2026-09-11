@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireUser, getCurrentUser } from "./helpers";
 
 export const create = mutation({
   args: {
@@ -17,14 +18,7 @@ export const create = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
-    // Deactivate old plans
+    const user = await requireUser(ctx);
     const oldPlans = await ctx.db
       .query("studyPlans")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
@@ -62,12 +56,7 @@ export const markSessionComplete = mutation({
 export const getActivePlan = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return null;
     const plan = await ctx.db
       .query("studyPlans")

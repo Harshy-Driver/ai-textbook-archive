@@ -23,6 +23,17 @@ export default function Onboarding() {
   const [curriculum, setCurriculum] = useState<Curriculum>("general");
   const [loading, setLoading] = useState(false);
 
+  const handleSkip = async () => {
+    setLoading(true);
+    try {
+      await updateProfile({ onboardingCompleted: true });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      navigate("/dashboard");
+    }
+  };
+
   const handleComplete = async () => {
     setLoading(true);
     try {
@@ -244,7 +255,8 @@ export default function Onboarding() {
         {/* Skip */}
         {step < steps.length - 1 && (
           <button
-            onClick={() => navigate("/dashboard")}
+            onClick={handleSkip}
+            disabled={loading}
             className="w-full mt-3 text-center text-xs text-muted-foreground hover:text-foreground transition-colors py-2"
           >
             Skip for now

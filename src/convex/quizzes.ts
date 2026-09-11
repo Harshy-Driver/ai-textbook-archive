@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireUser, getCurrentUser } from "./helpers";
 
 export const recordAttempt = mutation({
   args: {
@@ -22,13 +23,7 @@ export const recordAttempt = mutation({
     chapterIds: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     const attemptId = await ctx.db.insert("quizAttempts", {
       userId: user._id,
       ...args,
@@ -69,12 +64,7 @@ export const saveQuestions = mutation({
 export const listAttempts = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     return await ctx.db
       .query("quizAttempts")
@@ -87,12 +77,7 @@ export const listAttempts = query({
 export const listByLesson = query({
   args: { lessonId: v.id("lessons") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     return await ctx.db
       .query("quizAttempts")
@@ -115,22 +100,15 @@ export const getQuestions = query({
   },
 });
 
-// Get topic performance
 export const getTopicPerformance = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     const attempts = await ctx.db
       .query("quizAttempts")
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
-    // Group by lesson
     const topicMap: Record<string, { total: number; correct: number; lessonId: string }> = {};
     for (const attempt of attempts) {
       const lid = attempt.lessonId;

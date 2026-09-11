@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getCurrentUser } from "./helpers";
 
 export const updateProfile = mutation({
   args: {
@@ -11,13 +12,8 @@ export const updateProfile = mutation({
     onboardingCompleted: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
     await ctx.db.patch(user._id, args);
     return { success: true };
   },
@@ -26,12 +22,6 @@ export const updateProfile = mutation({
 export const getProfile = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    return user;
+    return await getCurrentUser(ctx);
   },
 });

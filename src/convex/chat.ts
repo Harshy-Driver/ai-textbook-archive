@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireUser, getCurrentUser } from "./helpers";
 
 export const send = mutation({
   args: {
@@ -7,13 +8,7 @@ export const send = mutation({
     content: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     await ctx.db.insert("chatMessages", {
       userId: user._id,
       lessonId: args.lessonId,
@@ -31,13 +26,7 @@ export const addAssistantMessage = mutation({
     content: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     await ctx.db.insert("chatMessages", {
       userId: user._id,
       lessonId: args.lessonId,
@@ -52,12 +41,7 @@ export const addAssistantMessage = mutation({
 export const listMessages = query({
   args: { lessonId: v.id("lessons") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     return await ctx.db
       .query("chatMessages")

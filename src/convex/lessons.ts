@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireUser, getCurrentUser } from "./helpers";
 
 // ---- Units ----
 export const createUnit = mutation({
@@ -10,13 +11,7 @@ export const createUnit = mutation({
     term: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     const unitId = await ctx.db.insert("units", {
       userId: user._id,
       bookId: args.bookId,
@@ -48,13 +43,7 @@ export const createChapter = mutation({
     order: v.number(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     const chapterId = await ctx.db.insert("chapters", {
       userId: user._id,
       bookId: args.bookId,
@@ -91,13 +80,7 @@ export const createLesson = mutation({
     importanceLevel: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     const lessonId = await ctx.db.insert("lessons", {
       userId: user._id,
       bookId: args.bookId,
@@ -156,12 +139,7 @@ export const listAllLessons = query({
 export const listUserLessons = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     return await ctx.db
       .query("lessons")
@@ -177,7 +155,6 @@ export const get = query({
   },
 });
 
-// Get full hierarchy for a lesson
 export const getLessonContext = query({
   args: { lessonId: v.id("lessons") },
   handler: async (ctx, args) => {

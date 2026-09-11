@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireUser, getCurrentUser } from "./helpers";
 
 export const upsert = mutation({
   args: {
@@ -8,13 +9,7 @@ export const upsert = mutation({
     studyMinutes: v.number(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     const existing = await ctx.db
       .query("studyProgress")
       .withIndex("by_user_lesson", (q) =>
@@ -38,7 +33,6 @@ export const upsert = mutation({
         totalStudySessions: 1,
       });
     }
-    // Update daily stats
     const today = new Date().toISOString().split("T")[0];
     const dailyStat = await ctx.db
       .query("dailyStats")
@@ -68,12 +62,7 @@ export const upsert = mutation({
 export const getUserProgress = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     return await ctx.db
       .query("studyProgress")
@@ -88,13 +77,7 @@ export const recordQuiz = mutation({
     quizTotal: v.number(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
-    if (!user) throw new Error("User not found");
+    const user = await requireUser(ctx);
     const today = new Date().toISOString().split("T")[0];
     const dailyStat = await ctx.db
       .query("dailyStats")
@@ -124,18 +107,12 @@ export const recordQuiz = mutation({
 export const getDailyStats = query({
   args: { days: v.number() },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", identity.email))
-      .first();
+    const user = await getCurrentUser(ctx);
     if (!user) return [];
     const stats = await ctx.db
       .query("dailyStats")
       .withIndex("by_user_date", (q) => q.eq("userId", user._id))
       .collect();
-    // Sort by date desc and limit
     stats.sort((a, b) => b.date.localeCompare(a.date));
     return stats.slice(0, args.days);
   },
