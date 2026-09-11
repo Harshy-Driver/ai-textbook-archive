@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { compressImage } from "@/lib/imageCompress";
 import { AppLayout } from "@/components/AppLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -67,12 +68,8 @@ export default function Books() {
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        // Create a data URL for the image
-        const dataUrl = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(file);
-        });
+        // Compress the image to fit within Convex's 1MB limit
+        const dataUrl = await compressImage(file);
 
         await uploadPage({
           bookId: selectedBook,
