@@ -14,7 +14,7 @@ export default defineConfig({
     // Force a single copy of React across all packages (including vlyPlugin).
     // Without this, @vly-ai/integrations can resolve its own React copy, which
     // triggers "Invalid hook call" errors at runtime.
-    dedupe: ["react", "react/jsx-runtime", "react-dom", "react-dom/client"],
+    dedupe: ["react", "react/jsx-runtime", "react-dom", "react-dom/client", "react-router", "@convex-dev/auth/react"],
   },
   build: {
     // Enable source maps for better debugging (disable in production if needed)
