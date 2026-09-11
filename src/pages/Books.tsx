@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { compressImage } from "@/lib/imageCompress";
+import { processPageBatch } from "@/convex/processPages";
 import { AppLayout } from "@/components/AppLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,14 +32,15 @@ export default function Books() {
   const createBook = useMutation(api.books.create);
   const removeBook = useMutation(api.books.remove);
   const uploadPage = useMutation(api.pages.upload);
-  const updatePageStatus = useMutation(api.pages.updateStatus);
   const removePage = useMutation(api.pages.remove);
+  const processPages = useMutation(api.processPages.processPageBatch);
 
   const [showNewBook, setShowNewBook] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [selectedBook, setSelectedBook] = useState<Id<"books"> | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ done: 0, total: 0 });
+  const [processing, setProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -49,7 +51,6 @@ export default function Books() {
 
   const handleCreateBook = async () => {
     if (!newTitle.trim()) return;
-    const user = null; // profile comes from context
     await createBook({
       title: newTitle.trim(),
       grade: 9,
@@ -66,25 +67,37 @@ export default function Books() {
       setUploading(true);
       setUploadProgress({ done: 0, total: files.length });
 
+      const uploadedIds: Id<"pages">[] = [];
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        // Compress the image to fit within Convex's 1MB limit
         const dataUrl = await compressImage(file);
-
-        await uploadPage({
+        const pageId = (await uploadPage({
           bookId: selectedBook,
           imageUrl: dataUrl,
-          order: (bookPages?.length ?? 0) + i,
-        });
-
-        // Simulate processing status
+          order: ((bookPages?.length ?? 0) + uploadedIds.length),
+        })) as Id<"pages">;
+        uploadedIds.push(pageId);
         setUploadProgress({ done: i + 1, total: files.length });
       }
 
       setUploading(false);
+
+      // Process all uploaded pages
+      if (uploadedIds.length > 0) {
+        setProcessing(true);
+        try {
+          await processPages({ pageIds: uploadedIds });
+        } catch (e) {
+          console.error("Page processing failed:", e);
+        } finally {
+          setProcessing(false);
+        }
+      }
+
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [selectedBook, bookPages, uploadPage]
+    [selectedBook, bookPages, uploadPage, processPages]
   );
 
   const handleDeleteBook = async (bookId: Id<"books">) => {
@@ -228,7 +241,7 @@ export default function Books() {
                         variant="outline"
                         size="sm"
                         onClick={() => cameraInputRef.current?.click()}
-                        disabled={uploading}
+                        disabled={uploading || processing}
                         className="gap-1.5"
                       >
                         <Camera className="h-3.5 w-3.5" />
@@ -237,7 +250,7 @@ export default function Books() {
                       <Button
                         size="sm"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={uploading}
+                        disabled={uploading || processing}
                         className="gap-1.5"
                       >
                         <Upload className="h-3.5 w-3.5" />
@@ -267,6 +280,16 @@ export default function Books() {
                     </div>
                   )}
 
+                  {/* Processing indicator */}
+                  {processing && (
+                    <div className="mb-4 p-3 bg-secondary rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        <span className="text-sm font-medium">Processing pages...</span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Pages grid */}
                   {bookPages && bookPages.length > 0 ? (
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -291,7 +314,7 @@ export default function Books() {
                             {page.status === "processed" && (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
                                 <CheckCircle2 className="h-3 w-3" />
-                                Processed
+                                Read
                               </span>
                             )}
                             {page.status === "processing" && (
@@ -327,10 +350,10 @@ export default function Books() {
                             <X className="h-3 w-3" />
                           </button>
                           {/* Info overlay */}
-                          {page.chapterTitle && (
+                          {page.extractedText && (
                             <div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                              <p className="text-[10px] text-white truncate">
-                                {page.chapterTitle}
+                              <p className="text-[10px] text-white truncate max-h-8 overflow-hidden">
+                                {page.extractedText.slice(0, 60)}...
                               </p>
                             </div>
                           )}
@@ -344,27 +367,54 @@ export default function Books() {
                         No pages uploaded yet
                       </p>
                       <p className="text-xs text-muted-foreground mb-4">
-                        Upload photos of your textbook pages. The AI will read and organize them.
+                        Upload photos of your textbook pages. They will be compressed and processed automatically.
                       </p>
                       <Button
                         onClick={() => fileInputRef.current?.click()}
+                        disabled={processing}
                         className="gap-2"
                       >
                         <Upload className="h-4 w-4" />
-                        Upload Pages
+                        {processing ? "Processing..." : "Upload Pages"}
                       </Button>
                     </div>
                   )}
 
-                  {/* Process button */}
+                  {/* Process button for existing pages */}
                   {bookPages && bookPages.length > 0 && (
                     <div className="mt-4 pt-4 border-t border-border">
-                      <Link to={`/books/${selectedBook}/organize`}>
-                        <Button variant="outline" className="w-full gap-2">
-                          <ChevronRight className="h-4 w-4" />
-                          Organize & Analyze Pages
+                      {bookPages.some((p) => p.status === "uploading" || p.status === "processed" || p.status === "failed") ? (
+                        <Button
+                          variant="outline"
+                          className="w-full gap-2"
+                          onClick={async () => {
+                            setProcessing(true);
+                            try {
+                              const ids = bookPages
+                                .filter((p) => p.status === "uploading" || p.status === "processed" || p.status === "failed")
+                                .map((p) => p._id) as Id<"pages">[];
+                              if (ids.length > 0) {
+                                await processPages({ pageIds: ids });
+                              }
+                            } catch (e) {
+                              console.error(e);
+                            } finally {
+                              setProcessing(false);
+                            }
+                          }}
+                          disabled={processing}
+                        >
+                          <Loader2 className={`h-4 w-4 ${processing ? "animate-spin" : ""}`} />
+                          {processing ? "Processing..." : "Process All Pages"}
                         </Button>
-                      </Link>
+                      ) : (
+                        <Link to={`/books/${selectedBook}/organize`}>
+                          <Button variant="outline" className="w-full gap-2">
+                            <ChevronRight className="h-4 w-4" />
+                            Organize & Analyze Pages
+                          </Button>
+                        </Link>
+                      )}
                     </div>
                   )}
                 </CardContent>
