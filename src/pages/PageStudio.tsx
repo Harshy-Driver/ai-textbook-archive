@@ -50,6 +50,11 @@ export default function PageStudio() {
   const analysis = useQuery(api.studyAi.getPageAnalysis, { pageId: typedPageId });
   const pageStudy = useQuery(api.studyAi.getPageStudy, { pageId: typedPageId });
   const flashcards = useQuery(api.studyAi.listHighlightFlashcards, { pageId: typedPageId });
+  const ownership = useQuery(
+    api.pages.getPageOwnership,
+    typedPageId ? { pageId: typedPageId } : "skip"
+  );
+  const claimBook = useMutation(api.pages.claimBookContent);
 
   const analyze = useAction(api.studyAiActions.analyzePage);
   const saveHighlights = useMutation(api.studyAi.saveHighlights);
@@ -91,6 +96,16 @@ export default function PageStudio() {
   const [busy, setBusy] = useState<string | null>(null);
 
   const thisPage = page?.find((p) => p._id === typedPageId);
+
+  // Recover content left under an anonymous session (e.g. pages uploaded
+  // before signing in) so the AI actions accept the current user.
+  useEffect(() => {
+    if (ownership && !ownership.mine && ownership.claimable && bookId) {
+      claimBook({ bookId: bookId as Id<"books"> })
+        .then(() => toast.success("Recovered your pages into this account"))
+        .catch(() => {});
+    }
+  }, [ownership?.claimable, ownership?.mine, bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync AI analysis into local editable state
   useEffect(() => {

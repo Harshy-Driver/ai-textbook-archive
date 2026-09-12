@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { useQuery, useAction } from "convex/react";
+import { useQuery, useAction, useMutation } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -20,6 +20,21 @@ export default function BookPages() {
   const book = useQuery(api.books.get, typedBookId ? { bookId: typedBookId } : "skip");
   const pages = useQuery(api.pages.listByBook, typedBookId ? { bookId: typedBookId } : "skip");
   const analyze = useAction(api.studyAiActions.analyzePage);
+  const firstOwnership = useQuery(
+    api.pages.getPageOwnership,
+    pages && pages.length > 0 ? { pageId: pages[0]._id } : "skip"
+  );
+  const claimBook = useMutation(api.pages.claimBookContent);
+
+  // Recover content left under an anonymous session (uploaded before sign-in)
+  // so AI actions accept the current user.
+  useEffect(() => {
+    if (firstOwnership && !firstOwnership.mine && firstOwnership.claimable && typedBookId) {
+      claimBook({ bookId: typedBookId })
+        .then(() => toast.success("Recovered your pages into this account"))
+        .catch(() => {});
+    }
+  }, [firstOwnership?.claimable, firstOwnership?.mine, typedBookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [busyPage, setBusyPage] = useState<string | null>(null);
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
