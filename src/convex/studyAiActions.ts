@@ -42,6 +42,18 @@ async function resolvePage(
 
 /** Fetch the page image and build an OpenAI-compatible vision content part. */
 async function buildPageParts(imageUrl: string) {
+  // Data URLs (how uploaded pages are stored) are decoded directly
+  const dataMatch = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(imageUrl);
+  if (dataMatch) {
+    const mime = dataMatch[1] || "image/jpeg";
+    const base64 = dataMatch[2]
+      ? dataMatch[3]
+      : Buffer.from(decodeURIComponent(dataMatch[3]), "utf8").toString("base64");
+    return [
+      { type: "text" as const, text: "Read this textbook page." },
+      { type: "image_url" as const, image_url: { url: `data:${mime};base64,${base64}` } },
+    ];
+  }
   const res = await fetch(imageUrl);
   if (!res.ok) throw new Error(`Could not fetch page image (${res.status})`);
   const buf = await res.arrayBuffer();
