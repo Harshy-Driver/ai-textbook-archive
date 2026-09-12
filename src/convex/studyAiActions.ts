@@ -205,7 +205,7 @@ export const analyzePage = action({
     const user = await requireActionUser(ctx);
     if (!aiKeyConfigured()) {
       throw new Error(
-        "AI is not configured: add OPENROUTER_API_KEY in the project's Keys/API keys tab.",
+        "AI is not configured: add OPENROUTER_API_KEY or MISTRAL_API_KEY in the project's Keys/API keys tab.",
       );
     }
     const page = await resolvePage(ctx, args.pageId, user._id);

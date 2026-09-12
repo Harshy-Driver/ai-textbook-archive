@@ -5,6 +5,7 @@
 // Vision requests go through direct fetch with image_url parts.
 
 const GATEWAY_URL = "https://openrouter.ai/api/v1/chat/completions";
+const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
 
 type TextPart = { type: "text"; text: string };
 type ImagePart = { type: "image_url"; image_url: { url: string } };
@@ -24,23 +25,54 @@ interface GatewayResponse {
 }
 
 export function aiKeyConfigured(): boolean {
-  return apiKeys().length > 0;
+  return providerConfigs().length > 0;
+}
+
+interface ProviderConfig {
+  name: string;
+  url: string;
+  keys: string[];
+  model: string;
 }
 
 /**
- * All available OpenRouter keys. A single key is normal; up to 4 spares can
- * be added as OPENROUTER_API_KEY_2 .. OPENROUTER_API_KEY_5 and are used
- * automatically when one is rate-limited or out of credit.
+ * Providers in priority order from env vars:
+ * 1. OpenRouter — OPENROUTER_API_KEY (+ spares _2.._5), model OPENROUTER_MODEL
+ * 2. Mistral — MISTRAL_API_KEY, model MISTRAL_MODEL
+ *
+ * Note: page reading needs a VISION model. For Mistral use e.g.
+ * pixtral-12b-2409 or pixtral-large-latest (text-only models cannot read photos).
  */
-function apiKeys(): string[] {
-  const keys: string[] = [];
+function providerConfigs(): ProviderConfig[] {
+  const providers: ProviderConfig[] = [];
+
+  const orKeys: string[] = [];
   const first = process.env.OPENROUTER_API_KEY?.trim();
-  if (first) keys.push(first);
+  if (first) orKeys.push(first);
   for (let i = 2; i <= 5; i++) {
     const spare = process.env[`OPENROUTER_API_KEY_${i}`]?.trim();
-    if (spare) keys.push(spare);
+    if (spare) orKeys.push(spare);
   }
-  return keys;
+  if (orKeys.length > 0) {
+    providers.push({
+      name: "OpenRouter",
+      url: GATEWAY_URL,
+      keys: orKeys,
+      model: modelName(),
+    });
+  }
+
+  const mistralKey = process.env.MISTRAL_API_KEY?.trim();
+  if (mistralKey) {
+    providers.push({
+      name: "Mistral",
+      url: MISTRAL_URL,
+      keys: [mistralKey],
+      model: process.env.MISTRAL_MODEL?.trim() || "pixtral-12b-2409",
+    });
+  }
+
+  return providers;
 }
 
 /**
@@ -55,54 +87,59 @@ export async function callAI(
   messages: GatewayMessage[],
   opts: { maxTokens?: number; temperature?: number } = {},
 ): Promise<string> {
-  const keys = apiKeys();
-  if (keys.length === 0) {
+  const providers = providerConfigs();
+  if (providers.length === 0) {
     throw new Error(
-      "AI is not configured: add OPENROUTER_API_KEY in the project's Keys/API keys tab.",
+      "AI is not configured: add OPENROUTER_API_KEY (or MISTRAL_API_KEY) in the project's Keys/API keys tab.",
     );
   }
 
-  let lastStatus = 0;
-  let lastBody = "";
-  for (let i = 0; i < keys.length; i++) {
-    const res = await fetch(GATEWAY_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${keys[i]}`,
-        // Optional attribution headers recommended by OpenRouter
-        "HTTP-Referer": "https://studyai-uae.app",
-        "X-Title": "StudyAI UAE",
-      },
-      body: JSON.stringify({
-        model: modelName(),
-        messages,
-        max_tokens: opts.maxTokens ?? 2000,
-        temperature: opts.temperature ?? 0.2,
-      }),
-    });
+  let lastError = "";
+  for (const provider of providers) {
+    let lastStatus = 0;
+    let lastBody = "";
+    for (let i = 0; i < provider.keys.length; i++) {
+      const res = await fetch(provider.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${provider.keys[i]}`,
+          // Optional attribution headers (used by OpenRouter)
+          "HTTP-Referer": "https://studyai-uae.app",
+          "X-Title": "StudyAI UAE",
+        },
+        body: JSON.stringify({
+          model: provider.model,
+          messages,
+          max_tokens: opts.maxTokens ?? 2000,
+          temperature: opts.temperature ?? 0.2,
+        }),
+      });
 
-    if (res.ok) {
-      const json = (await res.json()) as GatewayResponse;
-      const text = json.choices?.[0]?.message?.content;
-      if (!text) throw new Error("AI returned an empty response");
-      return text;
+      if (res.ok) {
+        const json = (await res.json()) as GatewayResponse;
+        const text = json.choices?.[0]?.message?.content;
+        if (!text) throw new Error("AI returned an empty response");
+        return text;
+      }
+
+      lastStatus = res.status;
+      lastBody = await res.text().catch(() => "");
+      // Rate-limited or out of credit → try the next key, if any
+      if (res.status !== 429 && res.status !== 402) break;
     }
 
-    lastStatus = res.status;
-    lastBody = await res.text().catch(() => "");
-    // Rate-limited or out of credit → try the next key, if any
-    if (res.status !== 429 && res.status !== 402) break;
+    if (lastStatus === 429 || lastStatus === 402) {
+      lastError =
+        provider.keys.length > 1
+          ? `All ${provider.keys.length} ${provider.name} keys are rate-limited or out of credit.`
+          : `${provider.name} key rate-limited or out of credit (HTTP ${lastStatus}).`;
+      continue; // fall through to the next provider
+    }
+    throw new Error(`AI gateway error (${lastStatus}): ${lastBody.slice(0, 300)}`);
   }
 
-  if (lastStatus === 429 || lastStatus === 402) {
-    throw new Error(
-      keys.length > 1
-        ? `All ${keys.length} AI keys are rate-limited or out of credit. Wait a moment or top up a key.`
-        : `AI key rate-limited or out of credit (HTTP ${lastStatus}). You can add a spare key as OPENROUTER_API_KEY_2.`,
-    );
-  }
-  throw new Error(`AI gateway error (${lastStatus}): ${lastBody.slice(0, 300)}`);
+  throw new Error(`${lastError} Add a spare key or top up in the Keys/API keys tab.`);
 }
 
 /**
