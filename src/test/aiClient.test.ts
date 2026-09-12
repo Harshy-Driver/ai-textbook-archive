@@ -47,8 +47,28 @@ describe("extractJson", () => {
     expect(() => extractJson("no json here")).toThrow(/did not contain JSON/);
   });
 
-  it("throws on truncated JSON", () => {
-    expect(() => extractJson('{"a": 1')).toThrow(/invalid JSON/);
+  it("repairs simple truncated objects instead of throwing", () => {
+    expect(extractJson<{ a: number }>('{"a": 1')).toEqual({ a: 1 });
+  });
+
+  it("repairs JSON truncated mid-string by the model's output limit", () => {
+    const raw =
+      '{"title": "Forces", "sections": [{"id": "s1", "title": "Must K';
+    const parsed = extractJson<{ title: string; sections: Array<{ id: string; title: string }> }>(raw);
+    expect(parsed.title).toBe("Forces");
+    expect(parsed.sections[0].id).toBe("s1");
+  });
+
+  it("repairs JSON truncated after a complete value with dangling key fragment", () => {
+    const raw = '{"a": 1, "items": ["one", "two"], "b"';
+    const parsed = extractJson<{ a: number; items: string[] }>(raw);
+    expect(parsed.a).toBe(1);
+    expect(parsed.items).toEqual(["one", "two"]);
+  });
+
+  it("repairs JSON truncated mid-array-item string", () => {
+    const parsed = extractJson<{ items: string[] }>('{"items": ["one", "two", "th');
+    expect(parsed.items).toEqual(["one", "two", "th"]);
   });
 });
 

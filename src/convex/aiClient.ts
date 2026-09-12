@@ -74,6 +74,70 @@ export async function callAI(
   return text;
 }
 
+/**
+ * Best-effort repair of JSON that an LLM truncated mid-string or mid-object
+ * (e.g. when it hits the max output token limit). Tries several cut/close
+ * strategies and returns the first candidate that parses, or null.
+ */
+function closeOpenJson(text: string): string {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let out = text;
+  if (inString) out += '"';
+  out += stack.reverse().join("");
+  return out;
+}
+
+function repairTruncatedJson(text: string): string | null {
+  const candidates: string[] = [closeOpenJson(text)];
+
+  // Track last comma and last closed string (outside strings)
+  let lastComma = -1;
+  let lastQuoteClose = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') {
+        inString = false;
+        lastQuoteClose = i;
+      }
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === ",") lastComma = i;
+  }
+
+  if (lastComma > 0) candidates.push(closeOpenJson(text.slice(0, lastComma)));
+  if (lastQuoteClose > 0) candidates.push(closeOpenJson(text.slice(0, lastQuoteClose + 1)));
+
+  for (const candidate of candidates) {
+    try {
+      JSON.parse(candidate);
+      return candidate;
+    } catch {
+      // try the next strategy
+    }
+  }
+  return null;
+}
+
 /** Extract a JSON object/array from a model response that may include fences or prose. */
 export function extractJson<T>(raw: string): T {
   let text = raw.trim();
@@ -111,11 +175,22 @@ export function extractJson<T>(raw: string): T {
     else if (ch === closeCh) {
       depth--;
       if (depth === 0) {
-        return JSON.parse(text.slice(start, i + 1)) as T;
+        try {
+          return JSON.parse(text.slice(start, i + 1)) as T;
+        } catch {
+          break; // fall through to repair
+        }
       }
     }
   }
-  throw new Error("AI response contained invalid JSON");
+  // Second chance: the model likely hit its output limit mid-JSON — repair it
+  const repaired = repairTruncatedJson(text.slice(start));
+  if (repaired !== null) {
+    return JSON.parse(repaired) as T;
+  }
+  throw new Error(
+    "The AI response was incomplete (the model hit its output limit). Try fewer pages at once, or set OPENROUTER_MODEL to a model with a larger output limit.",
+  );
 }
 
 /** Deterministic FNV-1a hash used to cache page analyses. */

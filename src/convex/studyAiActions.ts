@@ -599,10 +599,10 @@ export const generateStudyFile = action({
         { role: "system", content: STUDY_FILE_SYSTEM },
         {
           role: "user",
-          content: `Subject: ${user.subject ?? "physics"} · Grade: ${user.grade ?? 10} · Scope: ${args.scope}\n\n${sourceBlocks.slice(0, 60000)}`,
+          content: `Subject: ${user.subject ?? "physics"} · Grade: ${user.grade ?? 10} · Scope: ${args.scope}\n\n${sourceBlocks.slice(0, 48000)}`,
         },
       ],
-      { maxTokens: 4000, temperature: 0.3 },
+      { maxTokens: 8000, temperature: 0.3 },
     );
 
     const parsed = extractJson<{

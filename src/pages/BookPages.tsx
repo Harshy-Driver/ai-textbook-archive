@@ -220,7 +220,11 @@ function CreateAllPagesStudyFileButton({
       });
       navigate(`/study-files/${res.studyFileId}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create study file", { duration: 6000 });
+      const raw = e instanceof Error ? e.message : String(e);
+      const message = /\[CONVEX|Server Error|Called by client/i.test(raw)
+        ? "The AI could not finish building the study guide. Try fewer pages at once, then retry."
+        : raw;
+      toast.error(message, { duration: 8000 });
     } finally {
       setBusy(false);
     }
