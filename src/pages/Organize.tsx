@@ -366,9 +366,8 @@ export default function Organize() {
             {processedCount === totalCount ? "All Pages Already Read" : "Analyze All Pages"}
           </Button>
           <div className="text-xs text-muted-foreground">
-            {processedCount > 0 && totalCount > 0 && (
-              <span className="text-primary font-medium">{Math.round((processedCount / totalCount) * 100)}%</span> of pages analyzed
-            )}
+            {processedCount > 0 && totalCount > 0 ? (
+            <span className="text-primary font-medium">{Math.round((processedCount / totalCount) * 100)}% of pages analyzed</span>
           </div>
         </div>
 
@@ -385,8 +384,7 @@ export default function Organize() {
                     <FileText className="h-4 w-4 text-primary" />
                   </div>
                   <div>
-                    <h3 className="font-medium text-sm text-foreground">Create Chapters</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">
+                    <h3 className="font-medium text-sm text-foreground">Create Chapters</h3><p className="text-xs text-muted-foreground mt-0.5">
                       Group your read pages into chapters and lessons after analysis.
                     </p>
                   </div>

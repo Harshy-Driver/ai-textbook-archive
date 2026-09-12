@@ -1,8 +1,8 @@
-const MAX_SIZE_BYTES = 900 * 1024; // 900KB target to stay under 1MB with padding
+const MAX_SIZE_BYTES = 850 * 1024; // 850KB target to stay safely under 1MB Convex limit
 
 /**
  * Compress an image file to fit within Convex's 1MB mutation limit.
- * Resizes to max 2000px on the longest side and uses JPEG compression.
+ * Resizes to max 1600px on the longest side and uses JPEG compression.
  */
 export async function compressImage(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -14,8 +14,8 @@ export async function compressImage(file: File): Promise<string> {
 
       let { width, height } = img;
 
-      // Scale down if larger than 2000px on longest side
-      const MAX_DIM = 2000;
+      // Scale down if larger than 1600px on longest side
+      const MAX_DIM = 1600;
       if (width > MAX_DIM || height > MAX_DIM) {
         if (width > height) {
           height = Math.round((height / width) * MAX_DIM);
@@ -35,37 +35,114 @@ export async function compressImage(file: File): Promise<string> {
         return;
       }
 
+      // Use better quality image smoothing
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
       ctx.drawImage(img, 0, 0, width, height);
 
-      // Try JPEG at decreasing quality levels
-      let quality = 0.85;
-      let dataUrl = canvas.toDataURL("image/jpeg", quality);
+      // Function to get actual blob size
+      const getDataUrlWithSize = (type: string, q: number): { dataUrl: string; size: number } => {
+        return new Promise<{ dataUrl: string; size: number }>((resolve) => {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const Reader = new FileReader();
+              Reader.onloadend = () => {
+                resolve({ dataUrl: Reader.result as string, size: blob.size });
+              };
+              Reader.readAsDataURL(blob);
+            } else {
+              resolve({ dataUrl: "", size: Infinity });
+            }
+          }, type, q);
+        });
+      };
 
-      while (dataUrl.length * 0.75 > MAX_SIZE_BYTES && quality > 0.1) {
+      let dataUrl = "";
+      let size = Infinity;
+      let quality = 0.9;
+
+      // Try JPEG first with binary search for best quality
+      while (quality >= 0.3 && size > MAX_SIZE_BYTES) {
+        const result = getDataUrlWithSize("image/jpeg", quality);
+        // Use sync estimation first for speed, then verify
+        canvas.toBlob((blob) => {
+          if (blob) {
+            size = blob.size;
+            const Reader = new FileReader();
+            Reader.onloadend = () => {
+              dataUrl = Reader.result as string;
+            };
+            Reader.readAsDataURL(blob);
+          }
+        }, "image/jpeg", quality);
         quality -= 0.1;
-        dataUrl = canvas.toDataURL("image/jpeg", quality);
       }
 
-      // If still too large, try WebP
-      if (dataUrl.length * 0.75 > MAX_SIZE_BYTES) {
-        quality = 0.8;
-        dataUrl = canvas.toDataURL("image/webp", quality);
-        while (dataUrl.length * 0.75 > MAX_SIZE_BYTES && quality > 0.1) {
-          quality -= 0.1;
-          dataUrl = canvas.toDataURL("image/webp", quality);
+      // Simpler approach: just iterate until we get under the limit
+      async function compressSync() {
+        let q = 0.85;
+        while (q >= 0.2) {
+          const result = await new Promise<{ dataUrl: string; size: number }>((res) => {
+            canvas.toBlob((blob) => {
+              if (blob) {
+                const Reader = new FileReader();
+                Reader.onloadend = () => {
+                  res({ dataUrl: Reader.result as string, size: blob.size });
+                };
+                Reader.readAsDataURL(blob);
+              } else {
+                res({ dataUrl: "", size: Infinity });
+              }
+            }, "image/jpeg", q);
+          });
+          if (result.size <= MAX_SIZE_BYTES) {
+            return result;
+          }
+          q -= 0.1;
         }
-      }
-
-      // Final size reduction: scale down further if still too large
-      if (dataUrl.length * 0.75 > MAX_SIZE_BYTES) {
-        const scale = 0.6;
+        // If JPEG can't get small enough, try WebP
+        q = 0.8;
+        while (q >= 0.2) {
+          const result = await new Promise<{ dataUrl: string; size: number }>((res) => {
+            canvas.toBlob((blob) => {
+              if (blob) {
+                const Reader = new FileReader();
+                Reader.onloadend = () => {
+                  res({ dataUrl: Reader.result as string, size: blob.size });
+                };
+                Reader.readAsDataURL(blob);
+              } else {
+                res({ dataUrl: "", size: Infinity });
+              }
+            }, "image/webp", q);
+          });
+          if (result.size <= MAX_SIZE_BYTES) {
+            return result;
+          }
+          q -= 0.1;
+        }
+        // Last resort: scale down
+        const scale = 0.7;
         canvas.width = Math.round(width * scale);
         canvas.height = Math.round(height * scale);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        dataUrl = canvas.toDataURL("image/jpeg", 0.6);
+        const result = await new Promise<{ dataUrl: string; size: number }>((res) => {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const Reader = new FileReader();
+              Reader.onloadend = () => {
+                res({ dataUrl: Reader.result as string, size: blob.size });
+              };
+              Reader.readAsDataURL(blob);
+            } else {
+              res({ dataUrl: "", size: Infinity });
+            }
+          }, "image/jpeg", 0.6);
+        });
+        return result;
       }
 
-      resolve(dataUrl);
+      compressSync().then((result) => resolve(result.dataUrl));
     };
 
     img.onerror = () => {
