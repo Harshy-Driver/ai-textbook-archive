@@ -154,26 +154,16 @@ Using ONLY the page transcription provided (the student's actual textbook), retu
 }
 Never invent content that is not supported by the transcription.`;
 
-const STUDY_FILE_SYSTEM = `You are an expert study-guide writer for UAE Grade 9-11 Physics and Biology (English).
-You will receive one or more textbook page transcriptions (with source labels) and their highlights.
-Produce a structured revision document as ONLY JSON:
+const STUDY_FILE_ENRICH_SYSTEM = `You are an expert study-guide writer for UAE Grade 9-11 Physics and Biology (English).
+You receive one or more textbook page transcriptions (labelled by source). Write the narrative parts of a revision document.
+Return ONLY JSON:
 {
-  "title": string (the lesson or chapter title from the textbook; fall back to a clear descriptive title),
-  "sections": [ { "id": string (short-unique), "type": string, "title": string, "blocks": [block] } ]
+  "title": string (the lesson or chapter title from the textbook; else a clear descriptive title),
+  "overview": string (2-3 sentences describing what this material is about),
+  "commonMistakes": string[] (3-6 mistakes students commonly make on this topic, based on the pages),
+  "checks": [ { "question": string, "hint": string } ] (exactly 5 short check-yourself questions with a short answer hint)
 }
-Block kinds (use exactly these shapes):
-- {"kind":"paragraph","text":string,"sourcePage":string|null}
-- {"kind":"bullets","items":string[],"sourcePage":string|null}
-- {"kind":"numbered","items":string[],"sourcePage":string|null}
-- {"kind":"definition","term":string,"meaning":string,"sourcePage":string|null}
-- {"kind":"formula","formula":string,"symbols":string,"units":string,"whenToUse":string,"example":string(optional),"solution":string(optional),"sourcePage":string|null}
-- {"kind":"table","headers":string[],"rows":string[][],"sourcePage":string|null}
-- {"kind":"check","question":string,"hint":string}
-GUIDELINES:
-- Include sections for: what the lesson is about; must-know concepts; key definitions; important facts; formulas (Physics, using the formula block for every formula); processes step-by-step (Biology); diagrams/tables; examples; common mistakes; quick review; check-yourself (use the "check" block for 5 questions).
-- sourcePage must be the exact source label given to you (e.g. "Page 12") or null. NEVER invent page numbers.
-- Base everything on the transcriptions. You may add short, clearly-worded explanations to help a Grade 9-11 student, but textbook wording, numbers and formulas must be preserved exactly.
-- Keep it concise enough for quick revision.`;
+Base everything on the transcriptions. Preserve textbook wording, numbers and formulas exactly. Never invent page numbers or content.`;
 
 const SUMMARY_SYSTEM = `You are a study assistant for UAE Grade 9-11 Physics and Biology.
 Explain the following selected textbook highlights to the student. Use ONLY these highlights (and grade-appropriate wording). Do not add outside topics. Keep it under 180 words, plain prose.`;
@@ -545,8 +535,37 @@ export const generateHighlightQuiz = action({
 });
 
 // ---------------------------------------------------------------------------
-// generateStudyFile — lesson/pages/chapter revision document
+// generateStudyFile — revision document assembled deterministically from the
+// analysed pages (with an optional small AI enrichment). Assembly never depends
+// on one large AI response, so it cannot fail on output limits.
 // ---------------------------------------------------------------------------
+
+function dedupeItems<T extends { text: string }>(items: T[], max: number): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const it of items) {
+    const key = it.text.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(it);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** Render a list of source-tagged bullets as one bullets block per source page. */
+function groupBySource(items: Array<{ text: string; label: string }>): StudyBlock[] {
+  const map = new Map<string, string[]>();
+  for (const it of items) {
+    if (!map.has(it.label)) map.set(it.label, []);
+    map.get(it.label)!.push(it.text);
+  }
+  return Array.from(map.entries()).map(([label, texts]) => ({
+    kind: "bullets" as const,
+    items: texts,
+    sourcePage: label,
+  }));
+}
 
 export const generateStudyFile = action({
   args: {
@@ -559,10 +578,11 @@ export const generateStudyFile = action({
     const user = await requireActionUser(ctx);
     if (args.pageIds.length === 0) throw new Error("Select at least one page");
 
-    // Load pages + analyses in reading order
-    const pagesWithAnalysis: Array<{
+    // Load pages + analyses + per-page study panels in reading order
+    const loaded: Array<{
       page: Doc<"pages">;
       analysis: Doc<"pageAnalysis"> | null;
+      panel: PagePanel | null;
     }> = [];
     for (const pageId of args.pageIds.slice(0, 12)) {
       const page = await resolvePage(ctx, pageId, user._id);
@@ -570,54 +590,205 @@ export const generateStudyFile = action({
         pageId,
         userId: user._id,
       });
-      pagesWithAnalysis.push({ page, analysis: rows[0] ?? null });
+      const panelRaw = await ctx.runQuery(internal.studyAi.getPageStudyPanel, {
+        pageId,
+        userId: user._id,
+      });
+      loaded.push({ page, analysis: rows[0] ?? null, panel: parsePanel(panelRaw) });
     }
 
-    const analysed = pagesWithAnalysis.filter((p) => p.analysis?.fullText);
+    const analysed = loaded.filter((p) => p.analysis?.fullText);
     if (analysed.length === 0) {
       throw new Error(
         "No analysed pages selected. Run 'Highlight Important Things' on the pages first.",
       );
     }
 
-    const sourceBlocks = analysed
-      .map(({ analysis }, idx) => {
-        const printed = analysis?.pageNumber ? `Page ${analysis.pageNumber}` : null;
-        const label = printed ?? `Page ${idx + 1}`;
-        const hl = analysis?.highlights
-          ? (JSON.parse(analysis.highlights) as Array<{ text: string; priority: string }>)
-          : [];
-        const hlText = hl
-          .map((h) => `  - (${h.priority}) ${h.text}`)
-          .join("\n");
-        return `SOURCE ${label}:\n${analysis?.fullText ?? ""}\nHighlighted as important:\n${hlText}`;
-      })
-      .join("\n\n---\n\n");
-
-    const raw = await callAI(
-      [
-        { role: "system", content: STUDY_FILE_SYSTEM },
-        {
-          role: "user",
-          content: `Subject: ${user.subject ?? "physics"} · Grade: ${user.grade ?? 10} · Scope: ${args.scope}\n\n${sourceBlocks.slice(0, 48000)}`,
-        },
-      ],
-      { maxTokens: 8000, temperature: 0.3 },
+    // Printed page numbers are used ONLY when they were actually visible.
+    const labels = analysed.map((p, i) =>
+      p.analysis?.pageNumber ? `Page ${p.analysis.pageNumber}` : `Page ${i + 1}`,
     );
 
-    const parsed = extractJson<{
-      title?: unknown;
-      sections?: unknown;
-    }>(raw);
+    const definitions: Array<{ term: string; meaning: string; label: string }> = [];
+    const facts: Array<{ text: string; label: string }> = [];
+    const examFocus: Array<{ text: string; label: string }> = [];
+    const mustKnow: Array<{ text: string; label: string }> = [];
+    const formulas: Array<{ text: string; label: string }> = [];
+    const quickReview: Array<{ text: string; label: string }> = [];
+    const summaries: string[] = [];
 
+    analysed.forEach((p, i) => {
+      const label = labels[i];
+      const panel = p.panel;
+      if (panel?.pageSummary) summaries.push(panel.pageSummary);
+      for (const t of panel?.terms ?? []) {
+        if (t.term && t.meaning) definitions.push({ term: t.term, meaning: t.meaning, label });
+      }
+      for (const k of panel?.whatToKnow ?? []) quickReview.push({ text: k, label });
+      for (const e of panel?.examFocus ?? []) examFocus.push({ text: e, label });
+      for (const f of panel?.formulas ?? []) formulas.push({ text: f, label });
+
+      for (const h of safeHighlights(p.analysis?.highlights)) {
+        if (h.kind === "definition" || h.kind === "vocabulary") {
+          const shortTerm = (h.note?.trim() || h.text.split(/[.:\u2013\u2014-]/)[0] || "Definition").slice(0, 80);
+          definitions.push({ term: shortTerm, meaning: h.text, label });
+        } else if (h.kind === "formula" || h.kind === "equation") {
+          formulas.push({ text: h.text, label });
+        } else if (h.kind === "exam_relevant") {
+          examFocus.push({ text: h.text, label });
+        } else if (h.priority === "high") {
+          mustKnow.push({ text: h.text, label });
+        } else if (h.priority === "medium") {
+          facts.push({ text: h.text, label });
+        }
+      }
+    });
+
+    // ---- Optional small AI enrichment (title, overview, mistakes, checks) ----
+    let aiTitle = "";
+    let aiOverview = "";
+    let aiMistakes: string[] = [];
+    let aiChecks: Array<{ question: string; hint: string }> = [];
+    try {
+      const aiInput = analysed
+        .map((p, i) => `SOURCE ${labels[i]}:\n${(p.analysis?.fullText ?? "").slice(0, 4000)}`)
+        .join("\n\n---\n\n")
+        .slice(0, 26000);
+      const raw = await callAI(
+        [
+          { role: "system", content: STUDY_FILE_ENRICH_SYSTEM },
+          {
+            role: "user",
+            content: `Subject: ${user.subject ?? "physics"} · Grade: ${user.grade ?? 10} · Scope: ${args.scope}\n\n${aiInput}`,
+          },
+        ],
+        { maxTokens: 1600, temperature: 0.3 },
+      );
+      const parsed = extractJson<{
+        title?: unknown;
+        overview?: unknown;
+        commonMistakes?: unknown;
+        checks?: unknown;
+      }>(raw);
+      aiTitle = typeof parsed.title === "string" ? parsed.title.trim().slice(0, 120) : "";
+      aiOverview = typeof parsed.overview === "string" ? parsed.overview.trim().slice(0, 900) : "";
+      aiMistakes = Array.isArray(parsed.commonMistakes)
+        ? parsed.commonMistakes
+            .filter((m): m is string => typeof m === "string" && !!m.trim())
+            .slice(0, 6)
+        : [];
+      aiChecks = Array.isArray(parsed.checks)
+        ? parsed.checks
+            .filter(
+              (c): c is { question: string; hint: string } =>
+                !!c &&
+                typeof c === "object" &&
+                typeof (c as { question?: unknown }).question === "string",
+            )
+            .map((c) => ({
+              question: c.question.slice(0, 300),
+              hint: typeof c.hint === "string" ? c.hint.slice(0, 300) : "—",
+            }))
+            .slice(0, 5)
+        : [];
+    } catch {
+      // The deterministic document below is complete on its own.
+    }
+
+    // ---- Assemble sections (deterministic) ----
+    const sections: StudyFileSection[] = [];
+    const push = (id: string, title: string, blocks: StudyBlock[]) => {
+      if (blocks.length > 0) sections.push({ id, type: "content", title, blocks });
+    };
+
+    const overviewText = aiOverview || summaries.join(" ").trim();
+    if (overviewText) {
+      push("overview", "What This Lesson Is About", [{ kind: "paragraph", text: overviewText }]);
+    }
+
+    push("must-know", "Must Know", groupBySource(dedupeItems(mustKnow, 16)));
+
+    const defs: Array<{ term: string; meaning: string; label: string }> = [];
+    {
+      const seen = new Set<string>();
+      for (const d of definitions) {
+        const key = `${d.term.toLowerCase()}|${d.meaning.toLowerCase()}`;
+        if (!d.term.trim() || seen.has(key)) continue;
+        seen.add(key);
+        defs.push(d);
+        if (defs.length >= 20) break;
+      }
+    }
+    push(
+      "definitions",
+      "Key Definitions & Word Meanings",
+      defs.map((d) => ({
+        kind: "definition" as const,
+        term: d.term,
+        meaning: d.meaning,
+        sourcePage: d.label,
+      })),
+    );
+
+    push("facts", "Important Facts", groupBySource(dedupeItems(facts, 16)));
+    push("formulas", "Important Formulas", groupBySource(dedupeItems(formulas, 12)));
+    push(
+      "exam-focus",
+      "Exam Focus — What You Need For The Exam",
+      groupBySource(dedupeItems(examFocus, 16)),
+    );
+
+    // Per-page coverage: make sure every uploaded page's important parts appear
+    analysed.forEach((p, i) => {
+      const label = labels[i];
+      const panel = p.panel;
+      const blocks: StudyBlock[] = [];
+      if (panel?.pageSummary) {
+        blocks.push({ kind: "paragraph", text: panel.pageSummary, sourcePage: label });
+      }
+      const kp = dedupeItems(
+        (panel?.whatToKnow ?? []).map((t) => ({ text: t, label })),
+        8,
+      );
+      if (kp.length) blocks.push({ kind: "bullets", items: kp.map((k) => k.text), sourcePage: label });
+      for (const t of (panel?.terms ?? []).filter((t) => t.term && t.meaning).slice(0, 8)) {
+        blocks.push({ kind: "definition", term: t.term, meaning: t.meaning, sourcePage: label });
+      }
+      const ef = dedupeItems((panel?.examFocus ?? []).map((t) => ({ text: t, label })), 6);
+      if (ef.length) blocks.push({ kind: "bullets", items: ef.map((e) => e.text), sourcePage: label });
+      if (blocks.length) {
+        sections.push({
+          id: `page-${i + 1}`,
+          type: "page",
+          title: `${label} — Important Points`,
+          blocks,
+        });
+      }
+    });
+
+    if (aiMistakes.length > 0) {
+      push("mistakes", "Common Mistakes", [{ kind: "bullets", items: aiMistakes }]);
+    }
+
+    push("quick-review", "Quick Review", groupBySource(dedupeItems(quickReview, 14)));
+
+    const checks: StudyBlock[] =
+      aiChecks.length > 0
+        ? aiChecks.map((c) => ({ kind: "check" as const, question: c.question, hint: c.hint }))
+        : defs.slice(0, 5).map((d) => ({
+            kind: "check" as const,
+            question: `What is the meaning of “${d.term}”?`,
+            hint: d.meaning,
+          }));
+    push("check-yourself", "Check Yourself", checks);
+
+    // ---- Persist ----
     const title =
-      typeof parsed.title === "string" && parsed.title.trim()
-        ? parsed.title.trim().slice(0, 120)
-        : analysed[0]?.page.lessonTitle || "Study File";
+      aiTitle ||
+      analysed[0]?.page.lessonTitle ||
+      analysed[0]?.page.chapterTitle ||
+      "Study File";
 
-    const sections = normalizeStudySections(parsed.sections);
-
-    // Derive book meta from the first page
     const firstPage = analysed[0].page;
     let book: Doc<"books"> | null = null;
     try {
@@ -648,86 +819,6 @@ export const generateStudyFile = action({
   },
 });
 
-function normalizeStudySections(raw: unknown): StudyFileSection[] {
-  if (!Array.isArray(raw)) return [];
-  const out: StudyFileSection[] = [];
-  raw.slice(0, 16).forEach((s, si) => {
-    if (!s || typeof s !== "object") return;
-    const o = s as Record<string, unknown>;
-    const title = typeof o.title === "string" ? o.title : `Section ${si + 1}`;
-    const blocksRaw = Array.isArray(o.blocks) ? o.blocks : [];
-    const blocks: StudyBlock[] = [];
-    for (const b of blocksRaw) {
-      if (!b || typeof b !== "object") continue;
-      const bl = b as Record<string, unknown>;
-      const src =
-        typeof bl.sourcePage === "string" && bl.sourcePage.trim()
-          ? bl.sourcePage.trim()
-          : undefined;
-      const str = (v: unknown, fallback = "") =>
-        typeof v === "string" ? v : fallback;
-      switch (bl.kind) {
-        case "paragraph":
-          if (str(bl.text)) blocks.push({ kind: "paragraph", text: str(bl.text), sourcePage: src });
-          break;
-        case "bullets":
-        case "numbered": {
-          const items = Array.isArray(bl.items)
-            ? bl.items.filter((i): i is string => typeof i === "string").slice(0, 12)
-            : [];
-          if (items.length)
-            blocks.push(bl.kind === "bullets" ? { kind: "bullets", items, sourcePage: src } : { kind: "numbered", items, sourcePage: src });
-          break;
-        }
-        case "definition":
-          if (str(bl.term) && str(bl.meaning))
-            blocks.push({ kind: "definition", term: str(bl.term), meaning: str(bl.meaning), sourcePage: src });
-          break;
-        case "formula":
-          if (str(bl.formula))
-            blocks.push({
-              kind: "formula",
-              formula: str(bl.formula),
-              symbols: str(bl.symbols, "—"),
-              units: str(bl.units, "—"),
-              whenToUse: str(bl.whenToUse, "—"),
-              example: str(bl.example) || undefined,
-              solution: str(bl.solution) || undefined,
-              sourcePage: src,
-            });
-          break;
-        case "table": {
-          const headers = Array.isArray(bl.headers)
-            ? bl.headers.filter((h): h is string => typeof h === "string").slice(0, 6)
-            : [];
-          const rows = Array.isArray(bl.rows)
-            ? bl.rows
-                .filter((r): r is string[] => Array.isArray(r))
-                .map((r) => r.map((c) => (typeof c === "string" ? c : String(c ?? ""))))
-                .slice(0, 12)
-            : [];
-          if (headers.length && rows.length)
-            blocks.push({ kind: "table", headers, rows, sourcePage: src });
-          break;
-        }
-        case "check":
-          if (str(bl.question))
-            blocks.push({ kind: "check", question: str(bl.question), hint: str(bl.hint, "—") });
-          break;
-      }
-    }
-    if (blocks.length) {
-      out.push({
-        id: typeof o.id === "string" && o.id.trim() ? o.id.trim().slice(0, 40) : `sec-${si}`,
-        type: typeof o.type === "string" ? o.type : "content",
-        title: title.slice(0, 120),
-        blocks,
-      });
-    }
-  });
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // recomputeLessonAnalysis — regenerate lesson summaries/checklists/formulas
 // from real page transcriptions (called after pages are analysed)
@@ -747,13 +838,153 @@ Given textbook page transcriptions that belong to one lesson, return ONLY JSON:
 Only include information supported by the transcriptions.`;
 
 const PAGE_SUMMARY_SYSTEM = `You are a study assistant for UAE Grade 9-11 Physics and Biology (English).
-Summarize ONE textbook page for revision. Return ONLY JSON:
+Summarize ONE textbook page for revision and extract exactly what the student must know for exams.
+Return ONLY JSON:
 {
   "summary": string (3-5 sentences covering everything important on this page),
-  "keyPoints": string[] (4-8 short bullet points, the page's must-know facts),
-  "terms": string[] (important vocabulary introduced on this page, may be empty)
+  "keyPoints": string[] (4-8 short bullet points: the page's must-know facts),
+  "terms": [ { "term": string, "meaning": string } ] (important words introduced on the page WITH a short, Grade 9-11 appropriate meaning; empty if none),
+  "examFocus": string[] (2-6 points most likely to be examined from this page: definitions to recall, formulas/calculations, processes, comparisons. Do NOT claim anything is guaranteed to be on the exam),
+  "formulas": string[] (formulas exactly as printed on the page, e.g. "v = u + at"; empty for Biology unless a formula is present),
+  "diagramInfo": string[] (what any diagram or table on the page shows and its key labels; empty if none)
 }
-Use ONLY what is on the page. Never invent content.`;
+Use ONLY what is on the page. Never invent content that is not supported by the page.`;
+
+type PagePanel = {
+  whatToKnow: string[];
+  terms: { term: string; meaning: string }[];
+  facts: string[];
+  diagramInfo: string[];
+  quickQuestions: string[];
+  pageSummary?: string;
+  examFocus?: string[];
+  formulas?: string[];
+};
+
+function parsePanel(raw: string | null): PagePanel | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<PagePanel> & { terms?: unknown };
+    const terms = Array.isArray(parsed.terms)
+      ? parsed.terms
+          .map((t) =>
+            typeof t === "string"
+              ? { term: t, meaning: "" }
+              : (t as { term?: unknown; meaning?: unknown }),
+          )
+          .filter((t): t is { term: string; meaning: string } => !!t && typeof t.term === "string")
+          .map((t) => ({ term: t.term, meaning: typeof t.meaning === "string" ? t.meaning : "" }))
+      : [];
+    return {
+      whatToKnow: Array.isArray(parsed.whatToKnow) ? parsed.whatToKnow.filter((s): s is string => typeof s === "string") : [],
+      terms,
+      facts: Array.isArray(parsed.facts) ? parsed.facts.filter((s): s is string => typeof s === "string") : [],
+      diagramInfo: Array.isArray(parsed.diagramInfo)
+        ? parsed.diagramInfo.filter((s): s is string => typeof s === "string")
+        : [],
+      quickQuestions: Array.isArray(parsed.quickQuestions)
+        ? parsed.quickQuestions.filter((s): s is string => typeof s === "string")
+        : [],
+      pageSummary: typeof parsed.pageSummary === "string" ? parsed.pageSummary : undefined,
+      examFocus: Array.isArray(parsed.examFocus)
+        ? parsed.examFocus.filter((s): s is string => typeof s === "string")
+        : [],
+      formulas: Array.isArray(parsed.formulas)
+        ? parsed.formulas.filter((s): s is string => typeof s === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function safeHighlights(
+  raw?: string | null,
+): Array<{ text: string; priority: string; kind?: string; note?: string }> {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((h): h is Record<string, unknown> => !!h && typeof h === "object" && typeof (h as { text?: unknown }).text === "string")
+      .map((h) => ({
+        text: String(h.text),
+        priority: typeof h.priority === "string" ? h.priority : "medium",
+        kind: typeof h.kind === "string" ? h.kind : undefined,
+        note: typeof h.note === "string" ? h.note : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Generate and persist a rich per-page study panel (summary, word meanings,
+ * exam focus, formulas). One small AI call per page keeps every page inside the
+ * output limit. Returns true when a panel was saved.
+ */
+async function buildPagePanel(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  pageId: Id<"pages">,
+  text: string,
+): Promise<boolean> {
+  const raw = await callAI(
+    [
+      { role: "system", content: PAGE_SUMMARY_SYSTEM },
+      { role: "user", content: `Textbook page transcription:\n\n${text.slice(0, 8000)}` },
+    ],
+    { maxTokens: 1600, temperature: 0.2 },
+  );
+  const parsed = extractJson<{
+    summary?: unknown;
+    keyPoints?: unknown;
+    terms?: unknown;
+    examFocus?: unknown;
+    formulas?: unknown;
+    diagramInfo?: unknown;
+  }>(raw);
+  const summary = typeof parsed.summary === "string" ? parsed.summary.slice(0, 1200) : "";
+  if (!summary) return false;
+  const strArr = (v: unknown, max: number) =>
+    Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).slice(0, max)
+      : [];
+  const terms = Array.isArray(parsed.terms)
+    ? parsed.terms
+        .map((t) =>
+          typeof t === "string"
+            ? { term: t, meaning: "" }
+            : (t as { term?: unknown; meaning?: unknown }),
+        )
+        .filter((t): t is { term: string; meaning: string } => !!t && typeof t.term === "string")
+        .map((t) => ({
+          term: t.term.slice(0, 120),
+          meaning: typeof t.meaning === "string" ? t.meaning.slice(0, 400) : "",
+        }))
+        .slice(0, 10)
+    : [];
+  const keyPoints = strArr(parsed.keyPoints, 8);
+  const examFocus = strArr(parsed.examFocus, 6);
+  const formulas = strArr(parsed.formulas, 8);
+  const diagramInfo = strArr(parsed.diagramInfo, 8);
+
+  await ctx.runMutation(internal.studyAi.savePageStudyInternal, {
+    userId,
+    pageId,
+    panel: JSON.stringify({
+      whatToKnow: keyPoints,
+      terms,
+      facts: keyPoints,
+      diagramInfo,
+      quickQuestions: [],
+      pageSummary: summary,
+      examFocus,
+      formulas,
+    }),
+  });
+  return true;
+}
 
 export const recomputeLessonAnalysis = action({
   args: { lessonId: v.id("lessons") },
@@ -856,42 +1087,9 @@ export const summarizeAllPages = action({
       }
 
       try {
-        const raw = await callAI(
-          [
-            { role: "system", content: PAGE_SUMMARY_SYSTEM },
-            {
-              role: "user",
-              content: `Textbook page transcription:\n\n${fullText.slice(0, 8000)}`,
-            },
-          ],
-          { maxTokens: 900, temperature: 0.2 },
-        );
-        const parsed = extractJson<{ summary?: unknown; keyPoints?: unknown; terms?: unknown }>(raw);
-        const summary = typeof parsed.summary === "string" ? parsed.summary.slice(0, 1200) : "";
-        if (!summary) {
-          failed++;
-          continue;
-        }
-        const keyPoints = Array.isArray(parsed.keyPoints)
-          ? parsed.keyPoints.filter((k): k is string => typeof k === "string").slice(0, 8)
-          : [];
-        const terms = Array.isArray(parsed.terms)
-          ? parsed.terms.filter((t): t is string => typeof t === "string").slice(0, 10)
-          : [];
-
-        await ctx.runMutation(internal.studyAi.savePageStudyInternal, {
-          userId: user._id,
-          pageId,
-          panel: JSON.stringify({
-            whatToKnow: keyPoints,
-            terms: terms.map((t) => ({ term: t, meaning: "" })),
-            facts: keyPoints,
-            diagramInfo: [],
-            quickQuestions: [],
-            pageSummary: summary,
-          }),
-        });
-        summarized++;
+        const ok = await buildPagePanel(ctx, user._id, pageId, fullText);
+        if (ok) summarized++;
+        else failed++;
       } catch {
         failed++;
       }
@@ -1008,38 +1206,9 @@ export const createLessonFromPages = action({
         continue;
       }
       try {
-        const raw = await callAI(
-          [
-            { role: "system", content: PAGE_SUMMARY_SYSTEM },
-            { role: "user", content: `Textbook page transcription:\n\n${text.slice(0, 8000)}` },
-          ],
-          { maxTokens: 900, temperature: 0.2 },
-        );
-        const parsed = extractJson<{ summary?: unknown; keyPoints?: unknown; terms?: unknown }>(raw);
-        const summary = typeof parsed.summary === "string" ? parsed.summary.slice(0, 1200) : "";
-        if (!summary) {
-          failed++;
-          continue;
-        }
-        const keyPoints = Array.isArray(parsed.keyPoints)
-          ? parsed.keyPoints.filter((k): k is string => typeof k === "string").slice(0, 8)
-          : [];
-        const terms = Array.isArray(parsed.terms)
-          ? parsed.terms.filter((t): t is string => typeof t === "string").slice(0, 10)
-          : [];
-        await ctx.runMutation(internal.studyAi.savePageStudyInternal, {
-          userId: user._id,
-          pageId,
-          panel: JSON.stringify({
-            whatToKnow: keyPoints,
-            terms: terms.map((t) => ({ term: t, meaning: "" })),
-            facts: keyPoints,
-            diagramInfo: [],
-            quickQuestions: [],
-            pageSummary: summary,
-          }),
-        });
-        summarized++;
+        const ok = await buildPagePanel(ctx, user._id, pageId, text);
+        if (ok) summarized++;
+        else failed++;
       } catch {
         failed++;
       }
@@ -1108,5 +1277,92 @@ export const createLessonFromPages = action({
       summarized,
       failed,
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// generatePagesQuiz — a quiz built from the important content of every page
+// (highlights + per-page terms, exam focus and key points)
+// ---------------------------------------------------------------------------
+
+function parseQuizQuestions(raw: string, count: number) {
+  const parsed = extractJson<{ questions?: unknown }>(raw);
+  return Array.isArray(parsed.questions)
+    ? parsed.questions
+        .map((q) => q as Record<string, unknown>)
+        .filter(
+          (q): q is {
+            questionText: string;
+            options: string[];
+            correctAnswer: string;
+            explanation: string;
+          } =>
+            typeof q.questionText === "string" &&
+            Array.isArray(q.options) &&
+            q.options.every((o) => typeof o === "string") &&
+            typeof q.correctAnswer === "string" &&
+            q.options.includes(q.correctAnswer),
+        )
+        .map((q) => ({
+          questionText: q.questionText,
+          type: "mcq",
+          options: q.options.slice(0, 5),
+          correctAnswer: q.correctAnswer,
+          explanation: typeof q.explanation === "string" ? q.explanation : "",
+        }))
+        .slice(0, count)
+    : [];
+}
+
+export const generatePagesQuiz = action({
+  args: {
+    pageIds: v.array(v.id("pages")),
+    count: v.union(v.literal(5), v.literal(10), v.literal(15), v.literal(20)),
+    difficulty: v.union(
+      v.literal("easy"), v.literal("medium"), v.literal("hard"), v.literal("mixed"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireActionUser(ctx);
+    const chunks: string[] = [];
+    for (const pageId of args.pageIds.slice(0, 12)) {
+      await resolvePage(ctx, pageId, user._id);
+      const rows = await ctx.runQuery(internal.studyAi.getPageAnalysisRows, {
+        pageId,
+        userId: user._id,
+      });
+      const panelRaw = await ctx.runQuery(internal.studyAi.getPageStudyPanel, {
+        pageId,
+        userId: user._id,
+      });
+      const panel = parsePanel(panelRaw);
+      const label = rows[0]?.pageNumber ? `Page ${rows[0].pageNumber}` : `Page ${chunks.length + 1}`;
+      const lines: string[] = [];
+      const hl = safeHighlights(rows[0]?.highlights);
+      if (hl.length) lines.push(`Highlights: ${hl.map((h) => h.text).join(" | ")}`);
+      if (panel?.examFocus?.length) lines.push(`Exam focus: ${panel.examFocus.join(" | ")}`);
+      if (panel?.terms?.length)
+        lines.push(`Terms: ${panel.terms.map((t) => `${t.term} = ${t.meaning}`).join(" | ")}`);
+      if (panel?.whatToKnow?.length) lines.push(`Key points: ${panel.whatToKnow.join(" | ")}`);
+      if (rows[0]?.fullText) lines.push(`Text: ${rows[0].fullText.slice(0, 2500)}`);
+      if (lines.length) chunks.push(`${label}:\n${lines.join("\n")}`);
+    }
+    if (chunks.length === 0) {
+      throw new Error("No analysed pages found. Run 'Highlight All Pages' first.");
+    }
+
+    const raw = await callAI(
+      [
+        { role: "system", content: QUIZ_SYSTEM },
+        {
+          role: "user",
+          content: `Difficulty: ${args.difficulty}. Write exactly ${args.count} questions covering these pages.\n\n${chunks.join("\n\n---\n\n").slice(0, 14000)}`,
+        },
+      ],
+      { maxTokens: 3000, temperature: 0.3 },
+    );
+    const questions = parseQuizQuestions(raw, args.count);
+    if (questions.length === 0) throw new Error("The AI could not create a quiz from these pages");
+    return { questions };
   },
 });

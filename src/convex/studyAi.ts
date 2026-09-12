@@ -133,6 +133,9 @@ export const getPageStudy = query({
         facts: string[];
         diagramInfo: string[];
         quickQuestions: string[];
+        pageSummary?: string;
+        examFocus?: string[];
+        formulas?: string[];
       }),
     };
   },
@@ -616,5 +619,89 @@ export const getPageStudyInternal = internalQuery({
       .withIndex("by_page", (q) => q.eq("pageId", args.pageId))
       .collect();
     return rows.find((r) => r.userId === args.userId)?._id ?? null;
+  },
+});
+
+/** Raw study panel JSON for a page (or null when none exists yet). */
+export const getPageStudyPanel = internalQuery({
+  args: { pageId: v.id("pages"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("pageStudy")
+      .withIndex("by_page", (q) => q.eq("pageId", args.pageId))
+      .collect();
+    return rows.find((r) => r.userId === args.userId)?.panel ?? null;
+  },
+});
+
+/**
+ * Public bulk view of every page's important parts (summary, word meanings,
+ * exam focus, formulas) for the book pages screen. Only returns the caller's
+ * own pages, in the order requested.
+ */
+export const getPagesImportant = query({
+  args: { pageIds: v.array(v.id("pages")) },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) return [];
+    const out: Array<{
+      pageId: string;
+      position: number;
+      pageNumber: number | null;
+      hasPanel: boolean;
+      pageSummary?: string;
+      terms: { term: string; meaning: string }[];
+      keyPoints: string[];
+      examFocus: string[];
+      formulas: string[];
+    }> = [];
+    for (const pid of args.pageIds.slice(0, 24)) {
+      const p = await ctx.db.get(pid);
+      if (!p || p.userId !== user._id) continue;
+      const analysisRows = await ctx.db
+        .query("pageAnalysis")
+        .withIndex("by_page", (q) => q.eq("pageId", pid))
+        .collect();
+      const analysis = analysisRows.find((r) => r.userId === user._id);
+      const panelRows = await ctx.db
+        .query("pageStudy")
+        .withIndex("by_page", (q) => q.eq("pageId", pid))
+        .collect();
+      const panelRow = panelRows.find((r) => r.userId === user._id);
+      let panel: {
+        whatToKnow?: string[];
+        terms?: Array<{ term: string; meaning: string }> | string[];
+        facts?: string[];
+        pageSummary?: string;
+        examFocus?: string[];
+        formulas?: string[];
+      } | null = null;
+      if (panelRow) {
+        try {
+          panel = JSON.parse(panelRow.panel);
+        } catch {
+          panel = null;
+        }
+      }
+      const terms = Array.isArray(panel?.terms)
+        ? panel!.terms
+            .map((t) =>
+              typeof t === "string" ? { term: t, meaning: "" } : { term: t.term, meaning: t.meaning },
+            )
+            .filter((t) => t.term)
+        : [];
+      out.push({
+        pageId: String(pid),
+        position: out.length + 1,
+        pageNumber: analysis?.pageNumber ?? null,
+        hasPanel: !!panel,
+        pageSummary: typeof panel?.pageSummary === "string" ? panel.pageSummary : undefined,
+        terms,
+        keyPoints: panel?.whatToKnow ?? panel?.facts ?? [],
+        examFocus: panel?.examFocus ?? [],
+        formulas: panel?.formulas ?? [],
+      });
+    }
+    return out;
   },
 });

@@ -29,6 +29,9 @@ type PanelData = {
   facts: string[];
   diagramInfo: string[];
   quickQuestions: string[];
+  pageSummary?: string;
+  examFocus?: string[];
+  formulas?: string[];
 };
 
 type QuizQ = {
@@ -717,10 +720,10 @@ export default function PageStudio() {
                 </div>
                 {panel ? (
                   <div className="space-y-3 text-sm max-h-[60vh] overflow-auto pr-1">
-                    {(panel as PanelData & { pageSummary?: string }).pageSummary && (
+                    {panel.pageSummary && (
                       <div className="p-2.5 bg-primary/5 border border-primary/20 rounded-lg">
                         <p className="font-semibold text-xs uppercase tracking-wide text-primary mb-1">Page Summary</p>
-                        <p className="text-xs leading-relaxed">{(panel as PanelData & { pageSummary?: string }).pageSummary}</p>
+                        <p className="text-xs leading-relaxed">{panel.pageSummary}</p>
                       </div>
                     )}
                     <div>
@@ -729,10 +732,22 @@ export default function PageStudio() {
                     </div>
                     {panel.terms.length > 0 && (
                       <div>
-                        <p className="font-semibold text-xs uppercase tracking-wide text-muted-foreground mb-1">Important Terms</p>
+                        <p className="font-semibold text-xs uppercase tracking-wide text-muted-foreground mb-1">Important Terms &amp; What They Mean</p>
                         {panel.terms.map((t, i) => (
-                          <p key={i} className="text-xs mb-1"><span className="font-semibold">{t.term}:</span> {t.meaning}</p>
+                          <p key={i} className="text-xs mb-1"><span className="font-semibold">{t.term}:</span> {t.meaning || "—"}</p>
                         ))}
+                      </div>
+                    )}
+                    {panel.formulas && panel.formulas.length > 0 && (
+                      <div>
+                        <p className="font-semibold text-xs uppercase tracking-wide text-muted-foreground mb-1">Formulas On This Page</p>
+                        <ul className="list-disc pl-4 space-y-0.5 text-xs font-mono">{panel.formulas.map((f, i) => <li key={i}>{f}</li>)}</ul>
+                      </div>
+                    )}
+                    {panel.examFocus && panel.examFocus.length > 0 && (
+                      <div className="p-2.5 bg-amber-50/60 border border-amber-200/60 rounded-lg">
+                        <p className="font-semibold text-xs uppercase tracking-wide text-amber-800 mb-1">Exam Focus</p>
+                        <ul className="list-disc pl-4 space-y-0.5 text-xs text-amber-900">{panel.examFocus.map((e, i) => <li key={i}>{e}</li>)}</ul>
                       </div>
                     )}
                     {panel.facts.length > 0 && (
