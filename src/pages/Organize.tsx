@@ -32,11 +32,17 @@ function PageCard({
   onSelect,
   onStartDrag,
 }: {
-  page: { _id: Id<"pages">; imageUrl: string; status: string; extractedText: string };
-  isDragging: boolean;
-  isSelected: boolean;
-  onSelect: (id: Id<"pages">) => void;
-  onStartDrag: (e: React.DragEvent, id: Id<"pages">) => void;
+  page: {
+    _id: Id<"pages">
+    imageUrl: string
+    status: string
+    extractedText?: string
+    order?: number
+  }
+  isDragging: boolean
+  isSelected: boolean
+  onSelect: (id: Id<"pages">) => void
+  onStartDrag: (e: React.DragEvent, id: Id<"pages">) => void
 }) {
   return (
     <div
@@ -99,10 +105,10 @@ export default function Organize() {
   const navigate = useNavigate();
   const bookIdTyped = bookId as Id<"books"> | undefined;
 
-  const book = useQuery(api.books.get, bookId ? { bookId: bookIdTyped } : "skip");
+  const book = useQuery(api.books.get, bookId ? { bookId: bookIdTyped as Id<"books"> } : "skip");
   const pages = useQuery(
     api.pages.listByBook,
-    bookId ? { bookId: bookIdTyped } : "skip"
+    bookId ? { bookId: bookIdTyped as Id<"books"> } : "skip"
   );
   const processPages = useMutation(api.processPages.processPageBatch);
 
@@ -367,7 +373,10 @@ export default function Organize() {
           </Button>
           <div className="text-xs text-muted-foreground">
             {processedCount > 0 && totalCount > 0 ? (
-            <span className="text-primary font-medium">{Math.round((processedCount / totalCount) * 100)}% of pages analyzed</span>
+              <span className="text-primary font-medium">{Math.round((processedCount / totalCount) * 100)}% of pages analyzed</span>
+            ) : (
+              <span className="text-muted-foreground">No pages analyzed yet</span>
+            )}
           </div>
         </div>
 

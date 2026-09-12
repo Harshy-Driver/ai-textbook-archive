@@ -1,4 +1,4 @@
-const MAX_SIZE_BYTES = 850 * 1024; // 850KB target to stay safely under 1MB Convex limit
+const MAX_SIZE_BYTES = 950 * 1024; // Stay safely under Convex's 1MB mutation limit
 
 /**
  * Compress an image file to fit within Convex's 1MB mutation limit.
@@ -36,49 +36,13 @@ export async function compressImage(file: File): Promise<string> {
       }
 
       // Use better quality image smoothing
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(img, 0, 0, width, height);
-
-      // Function to get actual blob size
-      const getDataUrlWithSize = (type: string, q: number): { dataUrl: string; size: number } => {
-        return new Promise<{ dataUrl: string; size: number }>((resolve) => {
-          canvas.toBlob((blob) => {
-            if (blob) {
-              const Reader = new FileReader();
-              Reader.onloadend = () => {
-                resolve({ dataUrl: Reader.result as string, size: blob.size });
-              };
-              Reader.readAsDataURL(blob);
-            } else {
-              resolve({ dataUrl: "", size: Infinity });
-            }
-          }, type, q);
-        });
-      };
-
-      let dataUrl = "";
-      let size = Infinity;
-      let quality = 0.9;
-
-      // Try JPEG first with binary search for best quality
-      while (quality >= 0.3 && size > MAX_SIZE_BYTES) {
-        const result = getDataUrlWithSize("image/jpeg", quality);
-        // Use sync estimation first for speed, then verify
-        canvas.toBlob((blob) => {
-          if (blob) {
-            size = blob.size;
-            const Reader = new FileReader();
-            Reader.onloadend = () => {
-              dataUrl = Reader.result as string;
-            };
-            Reader.readAsDataURL(blob);
-          }
-        }, "image/jpeg", quality);
-        quality -= 0.1;
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, width, height);
       }
 
-      // Simpler approach: just iterate until we get under the limit
+      // Simpler approach: iterate until we get under the limit
       async function compressSync() {
         let q = 0.85;
         while (q >= 0.2) {
@@ -125,7 +89,9 @@ export async function compressImage(file: File): Promise<string> {
         const scale = 0.7;
         canvas.width = Math.round(width * scale);
         canvas.height = Math.round(height * scale);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        }
         const result = await new Promise<{ dataUrl: string; size: number }>((res) => {
           canvas.toBlob((blob) => {
             if (blob) {
