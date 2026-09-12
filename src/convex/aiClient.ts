@@ -1,11 +1,10 @@
 "use node";
 
 // Shared AI client for Smart Highlights & Study Files.
-// Uses the VLY integration gateway (OpenAI-compatible) with the project's
-// VLY_INTEGRATION_KEY. Vision requests go through direct fetch since the
-// bundled completion() helper only accepts string content.
+// Uses OpenRouter (OpenAI-compatible) with the project's OPENROUTER_API_KEY.
+// Vision requests go through direct fetch with image_url parts.
 
-const GATEWAY_URL = "https://integrations.vly.ai/v1/llm";
+const GATEWAY_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 type TextPart = { type: "text"; text: string };
 type ImagePart = { type: "image_url"; image_url: { url: string } };
@@ -25,28 +24,39 @@ interface GatewayResponse {
 }
 
 export function aiKeyConfigured(): boolean {
-  return !!process.env.VLY_INTEGRATION_KEY && !!process.env.VLY_INTEGRATION_KEY.trim();
+  return !!process.env.OPENROUTER_API_KEY && !!process.env.OPENROUTER_API_KEY.trim();
+}
+
+/**
+ * Vision-capable default model on OpenRouter.
+ * Override with OPENROUTER_MODEL (e.g. "anthropic/claude-3.5-sonnet").
+ */
+function modelName(): string {
+  return process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini";
 }
 
 export async function callAI(
   messages: GatewayMessage[],
   opts: { maxTokens?: number; temperature?: number } = {},
 ): Promise<string> {
-  const key = process.env.VLY_INTEGRATION_KEY;
+  const key = process.env.OPENROUTER_API_KEY;
   if (!key || !key.trim()) {
     throw new Error(
-      "AI is not configured: add VLY_INTEGRATION_KEY in the project's Keys/API keys tab.",
+      "AI is not configured: add OPENROUTER_API_KEY in the project's Keys/API keys tab.",
     );
   }
 
-  const res = await fetch(`${GATEWAY_URL}/chat/completions`, {
+  const res = await fetch(GATEWAY_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
+      // Optional attribution headers recommended by OpenRouter
+      "HTTP-Referer": "https://studyai-uae.app",
+      "X-Title": "StudyAI UAE",
     },
     body: JSON.stringify({
-      model: process.env.VLY_AI_MODEL || "gpt-4o-mini",
+      model: modelName(),
       messages,
       max_tokens: opts.maxTokens ?? 2000,
       temperature: opts.temperature ?? 0.2,
