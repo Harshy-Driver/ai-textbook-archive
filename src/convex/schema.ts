@@ -32,6 +32,11 @@ const schema = defineSchema(
       curriculum: v.optional(v.union(v.literal("general"), v.literal("advanced"))),
       language: v.optional(v.string()),
       onboardingCompleted: v.optional(v.boolean()),
+      studyIntensity: v.optional(v.union(
+        v.literal("light"),
+        v.literal("balanced"),
+        v.literal("exam_focus"),
+      )),
     }).index("email", ["email"]),
 
     // Books uploaded by users
@@ -241,6 +246,68 @@ const schema = defineSchema(
       completedAt: v.number(),
       answers: v.string(), // JSON
     }).index("by_user", ["userId"]),
+
+    // ---- Smart Highlights & Study Files ----
+
+    // Cached AI analysis of a single textbook page (OCR + highlights), keyed by
+    // a hash of the compressed image so re-uploads of the same page reuse it.
+    pageAnalysis: defineTable({
+      userId: v.id("users"),
+      pageId: v.id("pages"),
+      textHash: v.string(), // deterministic hash of the page image content
+      fullText: v.string(), // exact transcription of readable text
+      pageNumber: v.optional(v.number()), // only when visible in the photo
+      ocrConfidence: v.number(),
+      readability: v.union(
+        v.literal("clear"),
+        v.literal("partially_readable"),
+        v.literal("unreadable"),
+      ),
+      readabilityNote: v.optional(v.string()),
+      highlights: v.optional(v.string()), // JSON array of PageHighlight
+      updatedAt: v.number(),
+    }).index("by_page", ["pageId"])
+      .index("by_user_hash", ["userId", "textHash"]),
+
+    // Generated study documents (lesson, page, or chapter scope)
+    studyFiles: defineTable({
+      userId: v.id("users"),
+      title: v.string(),
+      subject: v.string(),
+      grade: v.number(),
+      chapterTitle: v.optional(v.string()),
+      unitTitle: v.optional(v.string()),
+      scope: v.union(
+        v.literal("lesson"),
+        v.literal("page"),
+        v.literal("pages"),
+        v.literal("chapter"),
+      ),
+      pageIds: v.string(), // JSON array of page ids in reading order
+      sections: v.string(), // JSON array of StudyFileSection
+      pageCount: v.number(),
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    }).index("by_user", ["userId"]),
+
+    // Per-page "Study This Page" panel (small study material per page)
+    pageStudy: defineTable({
+      userId: v.id("users"),
+      pageId: v.id("pages"),
+      panel: v.string(), // JSON: whatToKnow, terms, facts, diagramInfo, quickQuestions
+      updatedAt: v.number(),
+    }).index("by_page", ["pageId"]),
+
+    // Flashcards generated from highlights (standalone, page-scoped)
+    highlightFlashcards: defineTable({
+      userId: v.id("users"),
+      pageId: v.optional(v.id("pages")),
+      source: v.string(), // "highlights"
+      front: v.string(),
+      back: v.string(),
+      createdAt: v.number(),
+    }).index("by_page", ["pageId"])
+      .index("by_user", ["userId"]),
 
     // Daily statistics
     dailyStats: defineTable({
