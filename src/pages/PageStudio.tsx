@@ -458,13 +458,12 @@ export default function PageStudio() {
           {/* Viewer */}
           <div className="lg:col-span-3">
             <Card className="vintage-card overflow-hidden">
+              <Tabs value={tab} onValueChange={setTab}>
               <div className="px-3 pt-3 border-b border-border flex items-center justify-between flex-wrap gap-2">
-                <Tabs value={tab} onValueChange={setTab}>
-                  <TabsList>
-                    <TabsTrigger value="original">Original</TabsTrigger>
-                    <TabsTrigger value="highlighted">Highlighted</TabsTrigger>
-                  </TabsList>
-                </Tabs>
+                <TabsList>
+                  <TabsTrigger value="original">Original</TabsTrigger>
+                  <TabsTrigger value="highlighted">Highlighted</TabsTrigger>
+                </TabsList>
                 <div className="flex items-center gap-1 pb-1.5">
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setFit(false); setZoom((z) => Math.max(0.5, +(z - 0.2).toFixed(2))); }} title="Zoom out">
                     <ZoomOut className="h-3.5 w-3.5" />
@@ -560,6 +559,7 @@ export default function PageStudio() {
                   )}
                 </div>
               </TabsContent>
+              </Tabs>
             </Card>
 
             {/* Edit toolbar */}
