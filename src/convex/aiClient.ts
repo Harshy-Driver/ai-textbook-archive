@@ -24,7 +24,23 @@ interface GatewayResponse {
 }
 
 export function aiKeyConfigured(): boolean {
-  return !!process.env.OPENROUTER_API_KEY && !!process.env.OPENROUTER_API_KEY.trim();
+  return apiKeys().length > 0;
+}
+
+/**
+ * All available OpenRouter keys. A single key is normal; up to 4 spares can
+ * be added as OPENROUTER_API_KEY_2 .. OPENROUTER_API_KEY_5 and are used
+ * automatically when one is rate-limited or out of credit.
+ */
+function apiKeys(): string[] {
+  const keys: string[] = [];
+  const first = process.env.OPENROUTER_API_KEY?.trim();
+  if (first) keys.push(first);
+  for (let i = 2; i <= 5; i++) {
+    const spare = process.env[`OPENROUTER_API_KEY_${i}`]?.trim();
+    if (spare) keys.push(spare);
+  }
+  return keys;
 }
 
 /**
@@ -39,39 +55,54 @@ export async function callAI(
   messages: GatewayMessage[],
   opts: { maxTokens?: number; temperature?: number } = {},
 ): Promise<string> {
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key || !key.trim()) {
+  const keys = apiKeys();
+  if (keys.length === 0) {
     throw new Error(
       "AI is not configured: add OPENROUTER_API_KEY in the project's Keys/API keys tab.",
     );
   }
 
-  const res = await fetch(GATEWAY_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-      // Optional attribution headers recommended by OpenRouter
-      "HTTP-Referer": "https://studyai-uae.app",
-      "X-Title": "StudyAI UAE",
-    },
-    body: JSON.stringify({
-      model: modelName(),
-      messages,
-      max_tokens: opts.maxTokens ?? 2000,
-      temperature: opts.temperature ?? 0.2,
-    }),
-  });
+  let lastStatus = 0;
+  let lastBody = "";
+  for (let i = 0; i < keys.length; i++) {
+    const res = await fetch(GATEWAY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${keys[i]}`,
+        // Optional attribution headers recommended by OpenRouter
+        "HTTP-Referer": "https://studyai-uae.app",
+        "X-Title": "StudyAI UAE",
+      },
+      body: JSON.stringify({
+        model: modelName(),
+        messages,
+        max_tokens: opts.maxTokens ?? 2000,
+        temperature: opts.temperature ?? 0.2,
+      }),
+    });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`AI gateway error (${res.status}): ${body.slice(0, 300)}`);
+    if (res.ok) {
+      const json = (await res.json()) as GatewayResponse;
+      const text = json.choices?.[0]?.message?.content;
+      if (!text) throw new Error("AI returned an empty response");
+      return text;
+    }
+
+    lastStatus = res.status;
+    lastBody = await res.text().catch(() => "");
+    // Rate-limited or out of credit → try the next key, if any
+    if (res.status !== 429 && res.status !== 402) break;
   }
 
-  const json = (await res.json()) as GatewayResponse;
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) throw new Error("AI returned an empty response");
-  return text;
+  if (lastStatus === 429 || lastStatus === 402) {
+    throw new Error(
+      keys.length > 1
+        ? `All ${keys.length} AI keys are rate-limited or out of credit. Wait a moment or top up a key.`
+        : `AI key rate-limited or out of credit (HTTP ${lastStatus}). You can add a spare key as OPENROUTER_API_KEY_2.`,
+    );
+  }
+  throw new Error(`AI gateway error (${lastStatus}): ${lastBody.slice(0, 300)}`);
 }
 
 /**
