@@ -483,12 +483,10 @@ export default function PageStudio() {
           <div className="lg:col-span-3">
             <Card className="vintage-card overflow-hidden">
               <Tabs value={tab} onValueChange={setTab}>
-              <div className="px-3 pt-3 border-b border-border flex items-center justify-between flex-wrap gap-2">
-                <TabsList>
-                  <TabsTrigger value="original">Original</TabsTrigger>
-                  <TabsTrigger value="highlighted">Highlighted</TabsTrigger>
-                </TabsList>
-                <div className="flex items-center gap-1 pb-1.5">
+              <TabsList className="px-3 pt-3 border-b border-border flex items-center justify-between flex-wrap gap-2">
+                <TabsTrigger value="original">Original</TabsTrigger>
+                <TabsTrigger value="highlighted">Highlighted</TabsTrigger>
+                <div className="flex items-center gap-1 pb-1.5 ml-auto">
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setFit(false); setZoom((z) => Math.max(0.5, +(z - 0.2).toFixed(2))); }} title="Zoom out">
                     <ZoomOut className="h-3.5 w-3.5" />
                   </Button>
@@ -500,7 +498,7 @@ export default function PageStudio() {
                     <Maximize className="h-3 w-3 mr-1" /> Fit
                   </Button>
                 </div>
-              </div>
+              </TabsList>
 
               <TabsContent value="original" className="mt-0">
                 <div className="max-h-[70vh] overflow-auto bg-secondary/40 p-3">
