@@ -18,7 +18,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import type { Doc } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 
 export default function StudyFiles() {
   const navigate = useNavigate();
@@ -195,7 +195,7 @@ function CreateFromFileDialog({
     api.pages.listByBook,
     selectedBook ? { bookId: selectedBook as never } : "skip"
   );
-  const generate = useAction(api.studyAi.generateStudyFile);
+  const generate = useAction(api.studyAiActions.generateStudyFile);
   const navigate = useNavigate();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -214,7 +214,7 @@ function CreateFromFileDialog({
     if (selected.size === 0) return;
     setBusy(true);
     try {
-      const res = await generate({ pageIds: Array.from(selected), scope });
+      const res = await generate({ pageIds: Array.from(selected) as Id<"pages">[], scope });
       onOpenChange(false);
       navigate(`/study-files/${res.studyFileId}`);
     } catch (e) {

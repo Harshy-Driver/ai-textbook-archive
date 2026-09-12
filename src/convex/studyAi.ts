@@ -1,26 +1,45 @@
 import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireUser, getCurrentUser } from "./helpers";
+import type { HighlightKind, HighlightPriority } from "../lib/highlights";
 
 // Data functions for Smart Highlights & Study Files (queries + mutations only).
 // AI actions live in studyAiActions.ts ("use node").
 
-export type HighlightPriority = "high" | "medium" | "low";
+export type { HighlightKind, HighlightPriority };
 
 export interface PageHighlight {
   id: string;
   text: string;
   priority: HighlightPriority;
-  kind: string;
+  kind: HighlightKind;
   note?: string;
   source: "ai" | "user";
 }
+
+export type StudyBlock =
+  | { kind: "paragraph"; text: string; sourcePage?: string }
+  | { kind: "bullets"; items: string[]; sourcePage?: string }
+  | { kind: "numbered"; items: string[]; sourcePage?: string }
+  | { kind: "definition"; term: string; meaning: string; sourcePage?: string }
+  | {
+      kind: "formula";
+      formula: string;
+      symbols: string;
+      units: string;
+      whenToUse: string;
+      example?: string;
+      solution?: string;
+      sourcePage?: string;
+    }
+  | { kind: "table"; headers: string[]; rows: string[][]; sourcePage?: string }
+  | { kind: "check"; question: string; hint: string };
 
 export interface StudyFileSection {
   id: string;
   type: string;
   title: string;
-  blocks: Array<Record<string, unknown>>;
+  blocks: StudyBlock[];
 }
 
 // ---------------------------------------------------------------------------
@@ -105,12 +124,16 @@ export const getPageStudy = query({
       .collect();
     const mine = rows.find((r) => r.userId === user._id);
     if (!mine) return null;
-    return JSON.parse(mine.panel) as {
-      whatToKnow: string[];
-      terms: { term: string; meaning: string }[];
-      facts: string[];
-      diagramInfo: string[];
-      quickQuestions: string[];
+    return {
+      _id: mine._id,
+      updatedAt: mine.updatedAt,
+      ...(JSON.parse(mine.panel) as {
+        whatToKnow: string[];
+        terms: { term: string; meaning: string }[];
+        facts: string[];
+        diagramInfo: string[];
+        quickQuestions: string[];
+      }),
     };
   },
 });
@@ -221,7 +244,12 @@ export const getPagesMeta = query({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     if (!user) return [];
-    const out: Array<{ pageId: string; imageUrl: string; pageNumber: number | null }> = [];
+    const out: Array<{
+      pageId: string;
+      imageUrl: string;
+      pageNumber: number | null;
+      position: number;
+    }> = [];
     for (const pid of args.pageIds.slice(0, 12)) {
       const p = await ctx.db.get(pid);
       if (!p || p.userId !== user._id) continue;
@@ -230,7 +258,12 @@ export const getPagesMeta = query({
         .withIndex("by_page", (q) => q.eq("pageId", pid))
         .collect();
       const mine = analysisRows.find((r) => r.userId === user._id);
-      out.push({ pageId: String(pid), imageUrl: p.imageUrl, pageNumber: mine?.pageNumber ?? null });
+      out.push({
+        pageId: String(pid),
+        imageUrl: p.imageUrl,
+        pageNumber: mine?.pageNumber ?? null,
+        position: out.length + 1,
+      });
     }
     return out;
   },
@@ -280,7 +313,12 @@ export const getBookDoc = internalQuery({
 export const touchPage = internalMutation({
   args: {
     pageId: v.id("pages"),
-    status: v.union(v.literal("processing"), v.literal("processed"), v.literal("unreadable")),
+    status: v.union(
+      v.literal("processing"),
+      v.literal("processed"),
+      v.literal("unreadable"),
+      v.literal("failed"),
+    ),
     extractedText: v.optional(v.string()),
     ocrConfidence: v.optional(v.number()),
   },
@@ -373,5 +411,106 @@ export const saveHighlightCardsInternal = internalMutation({
       count++;
     }
     return { success: true, count };
+  },
+});
+
+export const getUserDoc = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.userId);
+  },
+});
+
+export const getStudyFileRow = internalQuery({
+  args: { studyFileId: v.id("studyFiles") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.studyFileId);
+  },
+});
+
+export const touchStudyFile = internalMutation({
+  args: { studyFileId: v.id("studyFiles") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.studyFileId, { updatedAt: Date.now() });
+    return { success: true };
+  },
+});
+
+export const patchPageStructure = internalMutation({
+  args: {
+    pageId: v.id("pages"),
+    unitTitle: v.optional(v.string()),
+    chapterTitle: v.optional(v.string()),
+    lessonTitle: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.pageId, {
+      unitTitle: args.unitTitle,
+      chapterTitle: args.chapterTitle,
+      lessonTitle: args.lessonTitle,
+    });
+    return { success: true };
+  },
+});
+
+export const getLessonDoc = internalQuery({
+  args: { lessonId: v.id("lessons") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.lessonId);
+  },
+});
+
+export const listLessonPages = internalQuery({
+  args: { lessonId: v.id("lessons") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("lessonPages")
+      .withIndex("by_lesson", (q) => q.eq("lessonId", args.lessonId))
+      .collect();
+  },
+});
+
+export const updateLessonFields = internalMutation({
+  args: {
+    lessonId: v.id("lessons"),
+    summary: v.optional(v.string()),
+    keyTerms: v.optional(v.string()),
+    formulas: v.optional(v.string()),
+    objectives: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.lessonId, {
+      summary: args.summary,
+      keyTerms: args.keyTerms,
+      formulas: args.formulas,
+      objectives: args.objectives,
+    });
+    return { success: true };
+  },
+});
+
+export const clearLessonInfo = internalMutation({
+  args: { lessonId: v.id("lessons") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("lessonInfo")
+      .withIndex("by_lesson_user", (q) => q.eq("lessonId", args.lessonId))
+      .collect();
+    for (const row of rows) await ctx.db.delete(row._id);
+    return { success: true };
+  },
+});
+
+export const insertLessonInfo = internalMutation({
+  args: {
+    userId: v.id("users"),
+    lessonId: v.id("lessons"),
+    level: v.union(v.literal("must_know"), v.literal("important"), v.literal("extra")),
+    content: v.string(),
+    order: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("lessonInfo", args);
+    return { success: true };
   },
 });

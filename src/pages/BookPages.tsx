@@ -19,7 +19,7 @@ export default function BookPages() {
 
   const book = useQuery(api.books.get, typedBookId ? { bookId: typedBookId } : "skip");
   const pages = useQuery(api.pages.listByBook, typedBookId ? { bookId: typedBookId } : "skip");
-  const analyze = useAction(api.studyAi.analyzePage);
+  const analyze = useAction(api.studyAiActions.analyzePage);
 
   const [busyPage, setBusyPage] = useState<string | null>(null);
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
@@ -188,7 +188,7 @@ function CreateAllPagesStudyFileButton({
   pages: Array<{ _id: Id<"pages">; status: string }>;
   disabled: boolean;
 }) {
-  const generate = useAction(api.studyAi.generateStudyFile);
+  const generate = useAction(api.studyAiActions.generateStudyFile);
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
 

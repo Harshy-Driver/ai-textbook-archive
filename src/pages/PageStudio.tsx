@@ -51,14 +51,14 @@ export default function PageStudio() {
   const pageStudy = useQuery(api.studyAi.getPageStudy, { pageId: typedPageId });
   const flashcards = useQuery(api.studyAi.listHighlightFlashcards, { pageId: typedPageId });
 
-  const analyze = useAction(api.studyAi.analyzePage);
+  const analyze = useAction(api.studyAiActions.analyzePage);
   const saveHighlights = useMutation(api.studyAi.saveHighlights);
   const resetAiHighlights = useMutation(api.studyAi.resetAiHighlights);
-  const savePageStudy = useAction(api.studyAi.generatePageStudy);
-  const summarize = useAction(api.studyAi.summarizeHighlights);
-  const makeCards = useAction(api.studyAi.generateHighlightFlashcards);
-  const makeQuiz = useAction(api.studyAi.generateHighlightQuiz);
-  const genStudyFile = useAction(api.studyAi.generateStudyFile);
+  const savePageStudy = useAction(api.studyAiActions.generatePageStudy);
+  const summarize = useAction(api.studyAiActions.summarizeHighlights);
+  const makeCards = useAction(api.studyAiActions.generateHighlightFlashcards);
+  const makeQuiz = useAction(api.studyAiActions.generateHighlightQuiz);
+  const genStudyFile = useAction(api.studyAiActions.generateStudyFile);
   const saveCards = useMutation(api.studyAi.saveHighlightFlashcards);
 
   const { user } = useAuth();

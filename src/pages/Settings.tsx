@@ -7,9 +7,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Check, GraduationCap, User, BookOpen, Globe, Bell } from "lucide-react";
+import { Check, GraduationCap, User, BookOpen, Globe, Bell, Gauge } from "lucide-react";
 import { GRADES, SUBJECTS, CURRICULA } from "@/types/study";
 import type { Grade, Subject, Curriculum } from "@/types/study";
+
+const INTENSITIES = [
+  { value: "light", label: "Light", desc: "Only the most essential information" },
+  { value: "balanced", label: "Balanced", desc: "Important concepts plus useful supporting info" },
+  { value: "exam_focus", label: "Exam Focus", desc: "Detailed understanding, calculations, definitions, processes" },
+] as const;
 
 export default function Settings() {
   const { user } = useAuth();
@@ -18,6 +24,9 @@ export default function Settings() {
   const [grade, setGrade] = useState<Grade>((user?.grade as Grade) || 9);
   const [subject, setSubject] = useState<Subject>((user?.subject as Subject) || "physics");
   const [curriculum, setCurriculum] = useState<Curriculum>((user?.curriculum as Curriculum) || "general");
+  const [intensity, setIntensity] = useState<"light" | "balanced" | "exam_focus">(
+    (user?.studyIntensity as "light" | "balanced" | "exam_focus") || "balanced",
+  );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -31,6 +40,7 @@ export default function Settings() {
         subject,
         curriculum,
         language: "english",
+        studyIntensity: intensity,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -149,6 +159,39 @@ export default function Settings() {
                   ))}
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Study intensity */}
+          <Card className="vintage-card">
+            <CardHeader className="pb-3">
+              <CardTitle className="font-serif-vintage text-base flex items-center gap-2">
+                <Gauge className="h-4 w-4" />
+                Study Intensity
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-xs text-muted-foreground mb-2">
+                Controls how much the AI highlights on your textbook pages. Nothing is ever
+                claimed to be "guaranteed on the exam".
+              </p>
+              {INTENSITIES.map((i) => (
+                <button
+                  key={i.value}
+                  onClick={() => setIntensity(i.value)}
+                  className={`w-full p-3 rounded-lg border-2 text-left transition-all ${
+                    intensity === i.value
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:border-primary/30"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium">{i.label}</p>
+                    {intensity === i.value && <Check className="h-3 w-3 text-primary" />}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">{i.desc}</p>
+                </button>
+              ))}
             </CardContent>
           </Card>
 
