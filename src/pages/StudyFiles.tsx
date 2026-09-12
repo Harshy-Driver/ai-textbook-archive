@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { AppLayout } from "@/components/AppLayout";
@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Check, GraduationCap, User, BookOpen, Globe, Bell, Gauge } from "lucide-react";
+import { Check, GraduationCap, User, Globe, Gauge } from "lucide-react";
 import { GRADES, SUBJECTS, CURRICULA } from "@/types/study";
 import type { Grade, Subject, Curriculum } from "@/types/study";
 

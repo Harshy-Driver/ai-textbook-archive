@@ -15,6 +15,8 @@ export interface PageHighlight {
   kind: HighlightKind;
   note?: string;
   source: "ai" | "user";
+  /** Client-only: exact drawn rectangle for manually added highlights (not persisted). */
+  box?: HighlightBox;
 }
 
 export interface HighlightBox {
@@ -47,10 +49,6 @@ export const PRIORITY_COLORS: Record<
     label: "Low priority",
   },
 };
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function normalizeForMatch(s: string): string {
   return s.replace(/\s+/g, " ").trim();

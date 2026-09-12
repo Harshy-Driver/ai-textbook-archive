@@ -7,7 +7,6 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { AppLayout } from "@/components/AppLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft, Highlighter, Loader2, CheckCircle2, AlertTriangle, Sparkles, FileText, Upload,
 } from "lucide-react";

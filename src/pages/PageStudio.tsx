@@ -12,7 +12,6 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Highlighter, ZoomIn, ZoomOut, Maximize, Undo2, Redo2, Eraser, StickyNote,
@@ -23,7 +22,6 @@ import {
   detectLineBoxes, snippetToBoxes, PRIORITY_COLORS, newHighlightId,
 } from "@/lib/highlights";
 import type { PageHighlight, HighlightPriority } from "@/lib/highlights";
-import type { StudyFileSection } from "@/convex/studyAi";
 
 type PanelData = {
   whatToKnow: string[];
@@ -74,7 +72,6 @@ export default function PageStudio() {
   const [zoom, setZoom] = useState(1);
   const [fit, setFit] = useState(true);
   const [lineBoxes, setLineBoxes] = useState<ReturnType<typeof detectLineBoxes> extends Promise<infer T> ? T : never>([]);
-  const [imgLoaded, setImgLoaded] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [highlights, setHighlights] = useState<PageHighlight[]>([]);
   const [history, setHistory] = useState<PageHighlight[][]>([]);
@@ -107,25 +104,34 @@ export default function PageStudio() {
     }
   }, [ownership?.claimable, ownership?.mine, bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync AI analysis into local editable state
-  useEffect(() => {
-    if (analysis) setHighlights(analysis.highlights ?? []);
-  }, [analysis?._id, analysis?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Sync AI analysis into local editable state (render-time state adjustment,
+  // per React docs: https://react.dev/learn/you-might-not-need-an-effect)
+  const analysisKey = `${analysis?._id ?? ""}:${analysis?.updatedAt ?? ""}`;
+  const analysisHighlights = analysis?.highlights;
+  const [prevAnalysisKey, setPrevAnalysisKey] = useState(analysisKey);
+  if (prevAnalysisKey !== analysisKey) {
+    setPrevAnalysisKey(analysisKey);
+    if (analysisHighlights) setHighlights(analysisHighlights);
+  }
 
-  useEffect(() => {
+  const pageStudyKey = `${pageStudy?._id ?? ""}:${pageStudy?.updatedAt ?? ""}`;
+  const [prevStudyKey, setPrevStudyKey] = useState(pageStudyKey);
+  if (prevStudyKey !== pageStudyKey) {
+    setPrevStudyKey(pageStudyKey);
     if (pageStudy) setPanel(pageStudy);
-  }, [pageStudy?._id, pageStudy?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   // Detect text line boxes for highlight positioning once image is available
+  const pageImageUrl = thisPage?.imageUrl;
   useEffect(() => {
     let cancelled = false;
-    if (thisPage?.imageUrl) {
-      detectLineBoxes(thisPage.imageUrl).then((boxes) => {
+    if (pageImageUrl) {
+      detectLineBoxes(pageImageUrl).then((boxes) => {
         if (!cancelled) setLineBoxes(boxes);
       }).catch(() => {});
     }
     return () => { cancelled = true; };
-  }, [thisPage?.imageUrl]);
+  }, [pageImageUrl]);
 
   // ---- highlight editing with undo/redo ----
   const pushHistory = useCallback((prev: PageHighlight[]) => {
@@ -197,8 +203,6 @@ export default function PageStudio() {
     }
   };
 
-  const handleGenerateHighlightsFromText = () => handleAnalyze();
-
   // Manual highlight: drag horizontally over the page to select a text region
   const dragRef = useRef<HTMLDivElement>(null);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
@@ -260,17 +264,13 @@ export default function PageStudio() {
       source: "user",
     };
     // Store drawn box directly on the highlight for exact placement
-    manualBoxesRef.current.set(manualBox.id, box);
-    commit([...highlights, manualBox]);
+    commit([...highlights, { ...manualBox, box } as PageHighlight]);
     setDragStart(null);
     setDragRect(null);
     setAddMode(false);
   };
 
-  const manualBoxesRef = useRef<Map<string, { x: number; y: number; w: number; h: number }>>(new Map());
-
   const removeHighlight = (id: string) => {
-    manualBoxesRef.current.delete(id);
     commit(highlights.filter((h) => h.id !== id));
     if (activeHl?.id === id) setActiveHl(null);
   };
@@ -412,18 +412,20 @@ export default function PageStudio() {
     }
   };
 
+  const fullText = analysis?.fullText;
   const highlightOverlay = useMemo(() => {
-    if (tab !== "highlighted" || !analysis?.fullText) return null;
+    if (tab !== "highlighted" || !fullText) return null;
     const boxesByHl: Record<string, { x: number; y: number; w: number; h: number }[]> = {};
     for (const hl of highlights) {
-      if (hl.source === "user" && manualBoxesRef.current.has(hl.id)) {
-        boxesByHl[hl.id] = [manualBoxesRef.current.get(hl.id)!];
+      const drawn = hl.box;
+      if (drawn) {
+        boxesByHl[hl.id] = [drawn];
       } else {
-        boxesByHl[hl.id] = snippetToBoxes(hl.text, analysis.fullText, lineBoxes);
+        boxesByHl[hl.id] = snippetToBoxes(hl.text, fullText, lineBoxes);
       }
     }
     return boxesByHl;
-  }, [tab, analysis?.fullText, highlights, lineBoxes]);
+  }, [tab, fullText, highlights, lineBoxes]);
 
   const unreadable = analysis?.readability === "unreadable";
 
@@ -499,7 +501,6 @@ export default function PageStudio() {
                     <img
                       src={thisPage.imageUrl}
                       alt="Textbook page"
-                      onLoad={() => setImgLoaded(true)}
                       className="mx-auto rounded shadow-md"
                       style={fit ? { maxWidth: "100%", height: "auto" } : { width: `${zoom * 100}%` }}
                     />
