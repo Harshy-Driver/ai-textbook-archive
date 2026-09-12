@@ -9,6 +9,7 @@ import {
   LogOut,
   Search,
   ClipboardCheck,
+  FileText,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import logo from "@/assets/logo.svg";
@@ -16,6 +17,7 @@ import logo from "@/assets/logo.svg";
 const sidebarItems = [
   { to: "/dashboard", icon: Home, label: "Dashboard" },
   { to: "/books", icon: BookOpen, label: "My Books" },
+  { to: "/study-files", icon: FileText, label: "Study Files" },
   { to: "/study", icon: GraduationCap, label: "Study" },
   { to: "/quizzes", icon: HelpCircle, label: "Quizzes" },
   { to: "/exam", icon: ClipboardCheck, label: "Exam Mode" },

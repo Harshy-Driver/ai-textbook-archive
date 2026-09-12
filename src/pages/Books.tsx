@@ -22,12 +22,16 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
+  Highlighter,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import type { Id } from "@/convex/_generated/dataModel";
+import { useAuth } from "@/hooks/use-auth";
 
 export default function Books() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const books = useQuery(api.books.listByUser);
   const createBook = useMutation(api.books.create);
   const removeBook = useMutation(api.books.remove);
@@ -53,9 +57,9 @@ export default function Books() {
     if (!newTitle.trim()) return;
     await createBook({
       title: newTitle.trim(),
-      grade: 9,
-      subject: "physics",
-      curriculum: "general",
+      grade: (user?.grade as number) ?? 9,
+      subject: (user?.subject as string) ?? "physics",
+      curriculum: (user?.curriculum as string) ?? "general",
     });
     setNewTitle("");
     setShowNewBook(false);
@@ -201,6 +205,18 @@ export default function Books() {
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/books/${book._id}/pages`);
+                      }}
+                      onKeyDown={(e) => e.key === "Enter" && navigate(`/books/${book._id}/pages`)}
+                      className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                    >
+                      <Highlighter className="h-3 w-3" /> Pages & Highlights
+                    </span>
                   </button>
                 </motion.div>
               ))

@@ -10,6 +10,9 @@ export const updateProfile = mutation({
     language: v.optional(v.string()),
     name: v.optional(v.string()),
     onboardingCompleted: v.optional(v.boolean()),
+    studyIntensity: v.optional(
+      v.union(v.literal("light"), v.literal("balanced"), v.literal("exam_focus")),
+    ),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
