@@ -514,3 +514,107 @@ export const insertLessonInfo = internalMutation({
     return { success: true };
   },
 });
+
+// ---- Lesson-from-pages helpers (called by createLessonFromPages action) ----
+
+export const nextLessonOrder = internalQuery({
+  args: { bookId: v.id("books") },
+  handler: async (ctx, args) => {
+    const lessons = await ctx.db
+      .query("lessons")
+      .withIndex("by_book", (q) => q.eq("bookId", args.bookId))
+      .collect();
+    return lessons.length;
+  },
+});
+
+/** Find the book's first chapter, or create one when the book has none. */
+export const ensureChapter = internalMutation({
+  args: {
+    userId: v.id("users"),
+    bookId: v.id("books"),
+    title: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("chapters")
+      .withIndex("by_book", (q) => q.eq("bookId", args.bookId))
+      .collect();
+    if (existing.length > 0) {
+      return existing.sort((a, b) => a.order - b.order)[0]._id;
+    }
+    return await ctx.db.insert("chapters", {
+      userId: args.userId,
+      bookId: args.bookId,
+      title: args.title ?? "My Textbook Pages",
+      order: 0,
+    });
+  },
+});
+
+export const insertLessonRow = internalMutation({
+  args: {
+    userId: v.id("users"),
+    bookId: v.id("books"),
+    chapterId: v.id("chapters"),
+    title: v.string(),
+    order: v.number(),
+    summary: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("lessons", {
+      userId: args.userId,
+      bookId: args.bookId,
+      chapterId: args.chapterId,
+      title: args.title,
+      order: args.order,
+      summary: args.summary,
+    });
+  },
+});
+
+export const linkPageToLesson = internalMutation({
+  args: {
+    lessonId: v.id("lessons"),
+    pageId: v.id("pages"),
+    order: v.number(),
+  },
+  handler: async (ctx, args) => {
+    // Avoid duplicate links
+    const existing = await ctx.db
+      .query("lessonPages")
+      .withIndex("by_lesson", (q) => q.eq("lessonId", args.lessonId))
+      .collect();
+    if (existing.some((lp) => lp.pageId === args.pageId)) return { success: false };
+    await ctx.db.insert("lessonPages", {
+      lessonId: args.lessonId,
+      pageId: args.pageId,
+      order: args.order,
+    });
+    return { success: true };
+  },
+});
+
+/** Detected lesson titles from pages' own lessonTitle fields, in page order. */
+export const getPageTitles = internalQuery({
+  args: { pageIds: v.array(v.id("pages")) },
+  handler: async (ctx, args) => {
+    const titles: Array<string | null> = [];
+    for (const pageId of args.pageIds.slice(0, 12)) {
+      const page = await ctx.db.get(pageId);
+      titles.push(page?.lessonTitle ?? null);
+    }
+    return titles;
+  },
+});
+
+export const getPageStudyInternal = internalQuery({
+  args: { pageId: v.id("pages"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("pageStudy")
+      .withIndex("by_page", (q) => q.eq("pageId", args.pageId))
+      .collect();
+    return rows.find((r) => r.userId === args.userId)?._id ?? null;
+  },
+});

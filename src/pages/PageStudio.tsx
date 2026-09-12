@@ -717,6 +717,12 @@ export default function PageStudio() {
                 </div>
                 {panel ? (
                   <div className="space-y-3 text-sm max-h-[60vh] overflow-auto pr-1">
+                    {(panel as PanelData & { pageSummary?: string }).pageSummary && (
+                      <div className="p-2.5 bg-primary/5 border border-primary/20 rounded-lg">
+                        <p className="font-semibold text-xs uppercase tracking-wide text-primary mb-1">Page Summary</p>
+                        <p className="text-xs leading-relaxed">{(panel as PanelData & { pageSummary?: string }).pageSummary}</p>
+                      </div>
+                    )}
                     <div>
                       <p className="font-semibold text-xs uppercase tracking-wide text-muted-foreground mb-1">What You Need To Know</p>
                       <ul className="list-disc pl-4 space-y-0.5 text-xs">{panel.whatToKnow.map((t, i) => <li key={i}>{t}</li>)}</ul>

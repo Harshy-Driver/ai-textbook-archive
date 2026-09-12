@@ -746,6 +746,15 @@ Given textbook page transcriptions that belong to one lesson, return ONLY JSON:
 }
 Only include information supported by the transcriptions.`;
 
+const PAGE_SUMMARY_SYSTEM = `You are a study assistant for UAE Grade 9-11 Physics and Biology (English).
+Summarize ONE textbook page for revision. Return ONLY JSON:
+{
+  "summary": string (3-5 sentences covering everything important on this page),
+  "keyPoints": string[] (4-8 short bullet points, the page's must-know facts),
+  "terms": string[] (important vocabulary introduced on this page, may be empty)
+}
+Use ONLY what is on the page. Never invent content.`;
+
 export const recomputeLessonAnalysis = action({
   args: { lessonId: v.id("lessons") },
   handler: async (ctx, args) => {
@@ -817,5 +826,287 @@ export const recomputeLessonAnalysis = action({
       }
     }
     return { success: true };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// summarizeAllPages — guarantee a summary for EVERY page (one small AI call
+// per page, so output limits can never truncate other pages' summaries)
+// ---------------------------------------------------------------------------
+
+export const summarizeAllPages = action({
+  args: {
+    pageIds: v.array(v.id("pages")),
+  },
+  handler: async (ctx, args): Promise<{ summarized: number; failed: number }> => {
+    const user = await requireActionUser(ctx);
+    let summarized = 0;
+    let failed = 0;
+
+    for (const pageId of args.pageIds.slice(0, 30)) {
+      const page = await resolvePage(ctx, pageId, user._id);
+      const rows = await ctx.runQuery(internal.studyAi.getPageAnalysisRows, {
+        pageId,
+        userId: user._id,
+      });
+      const fullText = rows[0]?.fullText ?? page.extractedText ?? "";
+      if (!fullText) {
+        failed++;
+        continue;
+      }
+
+      try {
+        const raw = await callAI(
+          [
+            { role: "system", content: PAGE_SUMMARY_SYSTEM },
+            {
+              role: "user",
+              content: `Textbook page transcription:\n\n${fullText.slice(0, 8000)}`,
+            },
+          ],
+          { maxTokens: 900, temperature: 0.2 },
+        );
+        const parsed = extractJson<{ summary?: unknown; keyPoints?: unknown; terms?: unknown }>(raw);
+        const summary = typeof parsed.summary === "string" ? parsed.summary.slice(0, 1200) : "";
+        if (!summary) {
+          failed++;
+          continue;
+        }
+        const keyPoints = Array.isArray(parsed.keyPoints)
+          ? parsed.keyPoints.filter((k): k is string => typeof k === "string").slice(0, 8)
+          : [];
+        const terms = Array.isArray(parsed.terms)
+          ? parsed.terms.filter((t): t is string => typeof t === "string").slice(0, 10)
+          : [];
+
+        await ctx.runMutation(internal.studyAi.savePageStudyInternal, {
+          userId: user._id,
+          pageId,
+          panel: JSON.stringify({
+            whatToKnow: keyPoints,
+            terms: terms.map((t) => ({ term: t, meaning: "" })),
+            facts: keyPoints,
+            diagramInfo: [],
+            quickQuestions: [],
+            pageSummary: summary,
+          }),
+        });
+        summarized++;
+      } catch {
+        failed++;
+      }
+    }
+
+    return { summarized, failed };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// createLessonFromPages — build a real lesson in the book from analysed pages:
+// chapter → lesson → linked pages → lesson summary/terms/objectives + per-page
+// study panels (summarizing any page that was skipped before)
+// ---------------------------------------------------------------------------
+
+const CHAPTER_TITLE_SYSTEM = `You name textbook chapters for UAE Grade 9-11 Physics and Biology (English).
+Given page transcriptions, return ONLY JSON: { "title": string } where title is 2-6 words naming the chapter topic (e.g. "Forces and Motion", "Cells and Respiration"). Use only topics visible in the pages.`;
+
+export const createLessonFromPages = action({
+  args: {
+    bookId: v.id("books"),
+    pageIds: v.array(v.id("pages")),
+    lessonTitle: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ lessonId: string; lessonTitle: string; summarized: number; failed: number }> => {
+    const user = await requireActionUser(ctx);
+    if (args.pageIds.length === 0) throw new Error("Select at least one page");
+
+    // Load pages + analyses (max 12, reading order preserved)
+    const loaded: Array<{ pageId: Id<"pages">; text: string }> = [];
+    for (const pageId of args.pageIds.slice(0, 12)) {
+      await resolvePage(ctx, pageId, user._id);
+      const rows = await ctx.runQuery(internal.studyAi.getPageAnalysisRows, {
+        pageId,
+        userId: user._id,
+      });
+      const text = rows[0]?.fullText ?? "";
+      if (text) loaded.push({ pageId, text });
+    }
+    if (loaded.length === 0) {
+      throw new Error("None of these pages have been analysed yet. Run 'Highlight Important Things' first.");
+    }
+
+    // 1. Lesson title (or user-provided / page-detected fallback)
+    let lessonTitle = args.lessonTitle?.trim() || "";
+    if (!lessonTitle) {
+      // Try the pages' detected lesson titles first (they come from the textbook)
+      const detected = await ctx.runQuery(internal.studyAi.getPageTitles, {
+        pageIds: loaded.map((l) => l.pageId),
+      });
+      lessonTitle = detected.find((t) => !!t) || "";
+    }
+    if (!lessonTitle) {
+      try {
+        const raw = await callAI(
+          [
+            { role: "system", content: CHAPTER_TITLE_SYSTEM },
+            {
+              role: "user",
+              content: loaded.map((l) => l.text.slice(0, 1500)).join("\n\n---\n\n").slice(0, 9000),
+            },
+          ],
+          { maxTokens: 100, temperature: 0.2 },
+        );
+        const parsed = extractJson<{ title?: unknown }>(raw);
+        if (typeof parsed.title === "string" && parsed.title.trim()) {
+          lessonTitle = parsed.title.trim().slice(0, 80);
+        }
+      } catch {
+        // fallback below
+      }
+    }
+    if (!lessonTitle) lessonTitle = "New Lesson";
+
+    // 2. Chapter (first existing, else create)
+    const chapterId = await ctx.runMutation(internal.studyAi.ensureChapter, {
+      userId: user._id,
+      bookId: args.bookId,
+    });
+
+    // 3. Lesson row
+    const order = await ctx.runQuery(internal.studyAi.nextLessonOrder, { bookId: args.bookId });
+    const lessonId = await ctx.runMutation(internal.studyAi.insertLessonRow, {
+      userId: user._id,
+      bookId: args.bookId,
+      chapterId,
+      title: lessonTitle,
+      order,
+    });
+
+    // 4. Link pages to the lesson
+    for (let i = 0; i < loaded.length; i++) {
+      await ctx.runMutation(internal.studyAi.linkPageToLesson, {
+        lessonId,
+        pageId: loaded[i].pageId,
+        order: i,
+      });
+    }
+
+    // 5. Per-page summaries — one small AI call per page so every page gets one
+    let summarized = 0;
+    let failed = 0;
+    for (const { pageId, text } of loaded) {
+      // Skip pages that already have a study panel from an earlier run
+      const existingPanel = await ctx.runQuery(internal.studyAi.getPageStudyInternal, {
+        pageId,
+        userId: user._id,
+      });
+      if (existingPanel) {
+        summarized++;
+        continue;
+      }
+      try {
+        const raw = await callAI(
+          [
+            { role: "system", content: PAGE_SUMMARY_SYSTEM },
+            { role: "user", content: `Textbook page transcription:\n\n${text.slice(0, 8000)}` },
+          ],
+          { maxTokens: 900, temperature: 0.2 },
+        );
+        const parsed = extractJson<{ summary?: unknown; keyPoints?: unknown; terms?: unknown }>(raw);
+        const summary = typeof parsed.summary === "string" ? parsed.summary.slice(0, 1200) : "";
+        if (!summary) {
+          failed++;
+          continue;
+        }
+        const keyPoints = Array.isArray(parsed.keyPoints)
+          ? parsed.keyPoints.filter((k): k is string => typeof k === "string").slice(0, 8)
+          : [];
+        const terms = Array.isArray(parsed.terms)
+          ? parsed.terms.filter((t): t is string => typeof t === "string").slice(0, 10)
+          : [];
+        await ctx.runMutation(internal.studyAi.savePageStudyInternal, {
+          userId: user._id,
+          pageId,
+          panel: JSON.stringify({
+            whatToKnow: keyPoints,
+            terms: terms.map((t) => ({ term: t, meaning: "" })),
+            facts: keyPoints,
+            diagramInfo: [],
+            quickQuestions: [],
+            pageSummary: summary,
+          }),
+        });
+        summarized++;
+      } catch {
+        failed++;
+      }
+    }
+
+    // 6. Lesson-level analysis (summary, key terms, objectives, must-know tiers)
+    let lessonSummary: string | undefined;
+    try {
+      const raw = await callAI(
+        [
+          { role: "system", content: LESSON_SYSTEM },
+          {
+            role: "user",
+            content: `Lesson: ${lessonTitle}\n\nPage transcriptions:\n${loaded
+              .map((l) => l.text)
+              .join("\n\n---\n\n")
+              .slice(0, 45000)}`,
+          },
+        ],
+        { maxTokens: 2200, temperature: 0.3 },
+      );
+      const parsed = extractJson<{
+        summary?: unknown; keyTerms?: unknown; formulas?: unknown; objectives?: unknown;
+        mustKnow?: unknown; important?: unknown; extra?: unknown;
+      }>(raw);
+      const strArr = (v: unknown, max: number) =>
+        Array.isArray(v)
+          ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).slice(0, max)
+          : [];
+
+      lessonSummary = typeof parsed.summary === "string" ? parsed.summary.slice(0, 800) : undefined;
+
+      await ctx.runMutation(internal.studyAi.updateLessonFields, {
+        lessonId,
+        summary: lessonSummary,
+        keyTerms: JSON.stringify(strArr(parsed.keyTerms, 10)),
+        formulas: JSON.stringify(strArr(parsed.formulas, 12)),
+        objectives: JSON.stringify(strArr(parsed.objectives, 8)),
+      });
+
+      const tiers: Array<{ level: "must_know" | "important" | "extra"; items: unknown }> = [
+        { level: "must_know", items: parsed.mustKnow },
+        { level: "important", items: parsed.important },
+        { level: "extra", items: parsed.extra },
+      ];
+      await ctx.runMutation(internal.studyAi.clearLessonInfo, { lessonId });
+      let infoOrder = 0;
+      for (const tier of tiers) {
+        for (const text of strArr(tier.items, 12)) {
+          await ctx.runMutation(internal.studyAi.insertLessonInfo, {
+            userId: user._id,
+            lessonId,
+            level: tier.level,
+            content: text,
+            order: infoOrder++,
+          });
+        }
+      }
+    } catch {
+      // Lesson works even if the big analysis fails — pages are linked and summarized
+    }
+
+    return {
+      lessonId: String(lessonId),
+      lessonTitle,
+      summarized,
+      failed,
+    };
   },
 });

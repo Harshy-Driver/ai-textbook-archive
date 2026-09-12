@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, Highlighter, Loader2, CheckCircle2, AlertTriangle, Sparkles, FileText, Upload,
+  BookOpen, ScrollText,
 } from "lucide-react";
 
 export default function BookPages() {
@@ -37,6 +38,9 @@ export default function BookPages() {
 
   const [busyPage, setBusyPage] = useState<string | null>(null);
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const [lessonBusy, setLessonBusy] = useState(false);
+  const summarizeAll = useAction(api.studyAiActions.summarizeAllPages);
+  const createLesson = useAction(api.studyAiActions.createLessonFromPages);
 
   const handleHighlightPage = async (pageId: Id<"pages">) => {
     if (!pages) return;
@@ -80,6 +84,48 @@ export default function BookPages() {
     }
   };
 
+  const handleSummarizeAll = async () => {
+    if (!pages || !typedBookId) return;
+    const analysed = pages.filter((p) => p.status === "processed").map((p) => p._id);
+    if (analysed.length === 0) {
+      toast.error("Analyse the pages first (Highlight All Pages)");
+      return;
+    }
+    setBulk({ done: 0, total: analysed.length });
+    try {
+      const res = await summarizeAll({ pageIds: analysed });
+      if (res.failed > 0) {
+        toast.warning(`Summarized ${res.summarized} pages — ${res.failed} could not be summarized.`, { duration: 6000 });
+      } else {
+        toast.success(`Summarized all ${res.summarized} pages`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Summaries failed", { duration: 8000 });
+    } finally {
+      setBulk(null);
+    }
+  };
+
+  const handleCreateLesson = async () => {
+    if (!pages || !typedBookId) return;
+    const analysed = pages.filter((p) => p.status === "processed").map((p) => p._id);
+    if (analysed.length === 0) {
+      toast.error("Analyse the pages first (Highlight All Pages)");
+      return;
+    }
+    setLessonBusy(true);
+    toast.info("Building your lesson — reading every page, writing summaries and the lesson plan…", { duration: 6000 });
+    try {
+      const res = await createLesson({ bookId: typedBookId, pageIds: analysed });
+      toast.success(`Lesson "${res.lessonTitle}" created — ${res.summarized} pages summarized`);
+      navigate(`/study/${res.lessonId}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create the lesson", { duration: 8000 });
+    } finally {
+      setLessonBusy(false);
+    }
+  };
+
   const processed = pages?.filter((p) => p.status === "processed").length ?? 0;
 
   return (
@@ -104,6 +150,14 @@ export default function BookPages() {
             <Button variant="outline" onClick={handleHighlightAll} disabled={!!bulk || !pages?.length} className="gap-2">
               {bulk ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               Highlight All Pages
+            </Button>
+            <Button variant="outline" onClick={handleSummarizeAll} disabled={!!bulk || lessonBusy || !pages?.length} className="gap-2">
+              <ScrollText className="h-4 w-4" />
+              Summarize Every Page
+            </Button>
+            <Button onClick={handleCreateLesson} disabled={!!bulk || lessonBusy || !pages?.length} className="gap-2">
+              {lessonBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookOpen className="h-4 w-4" />}
+              Create Lesson From Pages
             </Button>
             <CreateAllPagesStudyFileButton
               pages={pages ?? []}
